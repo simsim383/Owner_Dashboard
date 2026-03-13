@@ -10,7 +10,7 @@ const SUPABASE_URL = "https://zqipwxhhqyzzqowlwlfq.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxaXB3eGhocXl6enFvd2x3bGZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNTA3MjUsImV4cCI6MjA4ODkyNjcyNX0.nIG-rd11_Jc2wGTB4uYpQjJi5l9n9uDcsUdcPOJdh_o";
 const SB_HDR={"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"};
 // Claude API — requires your own API key for standalone deployment
-const ANTHROPIC_KEY = "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"; // ← paste your Anthropic API key here
+const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "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";
 const AI_HDR = ANTHROPIC_KEY ? {"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-dangerous-direct-browser-access":"true","anthropic-version":"2023-06-01"} : {"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
 async function sbGet(t,p=""){const r=await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`,{headers:SB_HDR});if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.message||`GET ${t} failed`);}return r.json();}
 async function sbPost(t,b){const r=await fetch(`${SUPABASE_URL}/rest/v1/${t}`,{method:"POST",headers:SB_HDR,body:JSON.stringify(b)});if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.message||`POST ${t} failed`);}return r.json();}
