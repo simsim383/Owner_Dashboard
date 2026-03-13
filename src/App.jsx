@@ -6,8 +6,8 @@ import * as XLSX from "xlsx";
 // SHOPMATE SALES DASHBOARD v2 — Full Feature Set
 // ═══════════════════════════════════════════════════════════════════
 
-const SUPABASE_URL = "https://zqipwxhhqyzzqowlwlfq.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxaXB3eGhocXl6enFvd2x3bGZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNTA3MjUsImV4cCI6MjA4ODkyNjcyNX0.nIG-rd11_Jc2wGTB4uYpQjJi5l9n9uDcsUdcPOJdh_o";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://zqipwxhhqyzzqowlwlfq.supabase.co";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "";
 const SB_HDR={"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"};
 // Claude API — requires your own API key for standalone deployment
 const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
@@ -16,39 +16,68 @@ async function sbGet(t,p=""){const r=await fetch(`${SUPABASE_URL}/rest/v1/${t}?$
 async function sbPost(t,b){const r=await fetch(`${SUPABASE_URL}/rest/v1/${t}`,{method:"POST",headers:SB_HDR,body:JSON.stringify(b)});if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.message||`POST ${t} failed`);}return r.json();}
 async function sbDelete(t,p){const r=await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`,{method:"DELETE",headers:SB_HDR});if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.message||`DELETE ${t} failed`);}return r.json();}
 function getOwnerIdFromURL(){return new URLSearchParams(window.location.search).get("owner")||null;}
-// Push parsed ShopMate data to Supabase
-async function pushToSupabase(clientId,data){
-  const date=data.dates?.start;if(!date||!clientId)return{ok:false,error:"Missing date or client ID"};
-  // Check for existing upload
-  try{const existing=await sbGet("uploads",`client_id=eq.${encodeURIComponent(clientId)}&report_date=eq.${date}`);
-  if(existing.length>0){
-    // Delete existing upload + cascade sales
-    await sbDelete("daily_sales",`upload_id=eq.${existing[0].id}`);
-    await sbDelete("uploads",`id=eq.${existing[0].id}`);
-  }}catch(e){console.warn("Duplicate check:",e);}
-  // Insert upload record
+// Push parsed ShopMate data to Supabase — handles day/week/month types
+async function pushToSupabase(clientId,data,uploadType,transactions){
+  const startDate=data.dates?.start;const endDate=data.dates?.end;
+  if(!startDate||!clientId)return{ok:false,error:"Missing date or client ID"};
+  const isEstimated=uploadType!=="day";
+  // Calculate days in range
+  const dStart=new Date(startDate+"T12:00:00");const dEnd=new Date(endDate+"T12:00:00");
+  const dayCount=Math.max(1,Math.round((dEnd-dStart)/(86400000))+1);
   const totalGross=data.items.reduce((s,i)=>s+i.gross,0);
   const totalQty=data.items.reduce((s,i)=>s+i.qty,0);
+  const avgBasket=transactions?Math.round(totalGross/transactions*100)/100:null;
+  // Generate list of dates in the range
+  const datesToInsert=[];
+  for(let d=new Date(dStart);d<=dEnd;d.setDate(d.getDate()+1)){datesToInsert.push(d.toISOString().split("T")[0]);}
+  const divisor=isEstimated?datesToInsert.length:1;
+  const dailyTrans=transactions?Math.round(transactions/datesToInsert.length):null;
   try{
-    const[upload]=await sbPost("uploads",[{client_id:clientId,report_date:date,report_start:data.dates.start,report_end:data.dates.end,filename:data.filename||"upload.xls",row_count:data.items.length,total_gross:totalGross,total_qty:totalQty}]);
-    console.log("Upload record created:",upload.id);
-    // Insert sales rows in batches of 100
-    const rows=data.items.map(i=>({client_id:clientId,upload_id:upload.id,report_date:date,barcode:i.barcode,product:i.product,category:i.category,qty:i.qty,gross:i.gross,net:i.net,gross_profit:i.grossProfit,gross_margin:i.grossMargin,has_cost_data:i.hasCost}));
-    for(let i=0;i<rows.length;i+=100){await sbPost("daily_sales",rows.slice(i,i+100));console.log(`Batch ${Math.floor(i/100)+1} inserted`);}
-    return{ok:true,uploadId:upload.id,rows:rows.length};
+    const uploadIds=[];
+    for(const date of datesToInsert){
+      // Check for existing data on this date
+      const existing=await sbGet("uploads",`client_id=eq.${encodeURIComponent(clientId)}&report_date=eq.${date}`);
+      if(existing.length>0){
+        const ex=existing[0];
+        // If existing is actual and new is estimated, skip (don't overwrite real data)
+        if(!ex.is_estimated&&isEstimated){console.log(`Skipping ${date} — actual data exists`);continue;}
+        // Otherwise delete existing (actual replaces estimated, or same type replaces)
+        await sbDelete("daily_sales",`upload_id=eq.${ex.id}`);
+        await sbDelete("uploads",`id=eq.${ex.id}`);
+      }
+      // Insert upload record for this day
+      const[upload]=await sbPost("uploads",[{client_id:clientId,report_date:date,report_start:startDate,report_end:endDate,filename:data.filename||"upload.xls",row_count:data.items.length,total_gross:Math.round(totalGross/divisor*100)/100,total_qty:Math.round(totalQty/divisor),upload_type:uploadType,is_estimated:isEstimated,transactions:dailyTrans,avg_basket:dailyTrans?Math.round((totalGross/divisor)/dailyTrans*100)/100:null}]);
+      // Insert sales rows divided by the number of days
+      const rows=data.items.map(i=>({client_id:clientId,upload_id:upload.id,report_date:date,barcode:i.barcode,product:i.product,category:i.category,qty:isEstimated?Math.round(i.qty/divisor):i.qty,gross:Math.round((i.gross/divisor)*100)/100,net:Math.round((i.net/divisor)*100)/100,gross_profit:i.grossProfit!=null?Math.round((i.grossProfit/divisor)*100)/100:null,gross_margin:i.grossMargin,has_cost_data:i.hasCost,is_estimated:isEstimated}));
+      for(let i=0;i<rows.length;i+=100){await sbPost("daily_sales",rows.slice(i,i+100));}
+      uploadIds.push(upload.id);
+      console.log(`${date}: ${isEstimated?"estimated":"actual"} — ${rows.length} rows`);
+    }
+    return{ok:true,uploadIds,daysInserted:uploadIds.length,totalDays:datesToInsert.length};
   }catch(e){console.error("Supabase push failed:",e);return{ok:false,error:e.message};}
+}
+// Delete an upload and its sales data
+async function deleteUploadFromSupabase(uploadId){
+  try{await sbDelete("daily_sales",`upload_id=eq.${uploadId}`);await sbDelete("uploads",`id=eq.${uploadId}`);return{ok:true};}
+  catch(e){return{ok:false,error:e.message};}
+}
+// Load all uploads metadata for management screen
+async function loadUploadsMeta(clientId){
+  if(!clientId)return[];
+  try{return await sbGet("uploads",`client_id=eq.${encodeURIComponent(clientId)}&order=report_date.desc&limit=365`);}
+  catch(e){console.error("Load uploads meta:",e);return[];}
 }
 // Load all uploads for a client from Supabase
 async function loadFromSupabase(clientId){
   if(!clientId)return[];
   try{
-    const uploads=await sbGet("uploads",`client_id=eq.${encodeURIComponent(clientId)}&order=report_date.desc&limit=90`);
+    const uploads=await sbGet("uploads",`client_id=eq.${encodeURIComponent(clientId)}&order=report_date.asc&limit=365`);
     const allDays=[];
     for(const u of uploads){
       const sales=await sbGet("daily_sales",`upload_id=eq.${u.id}&order=gross.desc`);
-      allDays.push({items:sales.map(s=>({barcode:s.barcode,product:s.product,category:s.category,qty:s.qty,gross:Number(s.gross),net:Number(s.net),grossProfit:s.gross_profit!=null?Number(s.gross_profit):null,grossMargin:s.gross_margin!=null?Number(s.gross_margin):null,hasCost:s.has_cost_data})),dates:{start:u.report_date,end:u.report_end||u.report_date}});
+      allDays.push({uploadId:u.id,items:sales.map(s=>({barcode:s.barcode,product:s.product,category:s.category,qty:s.qty,gross:Number(s.gross),net:Number(s.net),grossProfit:s.gross_profit!=null?Number(s.gross_profit):null,grossMargin:s.gross_margin!=null?Number(s.gross_margin):null,hasCost:s.has_cost_data,isEstimated:s.is_estimated||false})),dates:{start:u.report_date,end:u.report_date},isEstimated:u.is_estimated||false,uploadType:u.upload_type||"day",transactions:u.transactions,avgBasket:u.avg_basket?Number(u.avg_basket):null});
     }
-    return allDays.reverse(); // oldest first
+    return allDays; // already sorted asc
   }catch(e){console.error("Load from Supabase:",e);return[];}
 }
 // Fetch or create client by owner ID (owner ID is used as the name, UUID is auto-generated)
@@ -111,10 +140,158 @@ function AIChatSection({analysis,allDays}){const[messages,setMessages]=useState(
 
 function SearchView({analysis}){const[query,setQuery]=useState("");const[selected,setSelected]=useState(null);const results=useMemo(()=>{if(!query.trim())return[];const q=query.toLowerCase();return analysis.items.filter(i=>i.product.toLowerCase().includes(q)||i.category.toLowerCase().includes(q)||i.barcode.includes(q)).sort((a,b)=>b.gross-a.gross).slice(0,50)},[query,analysis.items]);const cats=useMemo(()=>{const m={};analysis.items.forEach(i=>{if(!m[i.category])m[i.category]={name:i.category,count:0,revenue:0};m[i.category].count++;m[i.category].revenue+=i.gross});return Object.values(m).sort((a,b)=>b.revenue-a.revenue)},[analysis.items]);return(<div style={{paddingTop:4}}><div style={{position:"relative",marginBottom:14}}><div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:16,color:C.textMuted,pointerEvents:"none"}}>🔍</div><input type="text" value={query} onChange={e=>{setQuery(e.target.value);setSelected(null)}} placeholder="Search products..." style={{width:"100%",padding:"12px 14px 12px 42px",borderRadius:12,background:C.card,color:C.white,border:`1px solid ${C.border}`,fontSize:14,fontWeight:500,outline:"none",fontFamily:"'Inter',sans-serif",boxSizing:"border-box"}}/>{query&&<button onClick={()=>{setQuery("");setSelected(null)}} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.textMuted,fontSize:16,cursor:"pointer"}}>✕</button>}</div>{!query.trim()&&<div>{cats.map((cat,i)=><button key={i} onClick={()=>setQuery(cat.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",padding:"11px 14px",marginBottom:5,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,cursor:"pointer",textAlign:"left"}}><div><div style={{fontSize:12,fontWeight:600,color:C.white}}>{cat.name}</div><div style={{fontSize:10,color:C.textMuted}}>{cat.count} products · {fi(cat.revenue)}</div></div><div style={{fontSize:12,color:C.textMuted}}>›</div></button>)}</div>}{query.trim()&&results.length>0&&results.map((item,i)=><div key={i} onClick={()=>setSelected(selected===i?null:i)} style={{cursor:"pointer"}}><div style={{display:"flex",justifyContent:"space-between",padding:"10px 12px",marginBottom:4,borderRadius:10,background:selected===i?C.surface:C.card,border:`1px solid ${selected===i?C.accentLight:C.border}`}}><div style={{flex:2}}><div style={{fontSize:11,color:C.white,fontWeight:600}}>{item.product}</div><div style={{fontSize:9,color:C.textMuted}}>{item.category}</div></div><div style={{textAlign:"right"}}><div style={{fontSize:11,color:C.white,fontWeight:600}}>{f(item.gross)}</div><div style={{fontSize:9,color:item.hasCost?C.greenText:C.textMuted}}>×{item.qty} · {item.hasCost?pct(item.grossMargin):"no cost"}</div></div></div>{selected===i&&<div style={{padding:"8px 12px 12px",marginBottom:4,borderRadius:"0 0 10px 10px",background:C.surface,border:`1px solid ${C.border}`,borderTop:"none",display:"flex",flexWrap:"wrap",gap:8}}>{[["Qty",item.qty],["Gross",f(item.gross)],["Net",f(item.net)],["Profit",item.hasCost?f(item.grossProfit):"—"],["Margin",item.hasCost?pct(item.grossMargin):"—"]].map(([l,v])=><div key={l} style={{minWidth:60,textAlign:"center"}}><div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:12,fontWeight:700,color:C.white,marginTop:2}}>{v}</div></div>)}</div>}</div>)}{query.trim()&&results.length===0&&<EmptyState msg={`No results for "${query}"`}/>}</div>)}
 
-function UploadScreen({onDataLoaded,uploads}){const[dragging,setDragging]=useState(false);const[error,setError]=useState(null);const[loading,setLoading]=useState(false);const fileRef=useRef();const handleFile=useCallback(async(file)=>{if(!file)return;setError(null);setLoading(true);try{const buf=await file.arrayBuffer();const data=parseFile(buf,file.name);onDataLoaded(data,file.name)}catch(e){setError(e.message||"Failed")}setLoading(false)},[onDataLoaded]);return(<div style={{padding:"40px 20px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"60vh"}}><div style={{width:64,height:64,borderRadius:16,background:`linear-gradient(135deg,${C.accentLight},${C.green})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,marginBottom:20}}>📊</div><div style={{fontSize:20,fontWeight:800,color:C.white,marginBottom:6}}>ShopMate Sales</div><div style={{fontSize:12,color:C.textMuted,marginBottom:32,textAlign:"center"}}>Upload your daily Item Sales Report</div><div onDragOver={e=>{e.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);handleFile(e.dataTransfer.files[0])}} onClick={()=>fileRef.current?.click()} style={{width:"100%",maxWidth:360,padding:"40px 20px",borderRadius:16,cursor:"pointer",border:`2px dashed ${dragging?C.accentLight:C.border}`,textAlign:"center",background:dragging?C.accentGlow:C.card}}>{loading?<div style={{fontSize:14,color:C.accentLight,fontWeight:600}}>Processing...</div>:<><div style={{fontSize:36,marginBottom:12}}>📁</div><div style={{fontSize:13,color:C.white,fontWeight:600,marginBottom:6}}>Tap to select file</div><div style={{fontSize:11,color:C.textMuted}}>or drag & drop .xls export</div></>}</div><input ref={fileRef} type="file" accept=".xls,.xlsx" multiple style={{display:"none"}} onChange={e=>Array.from(e.target.files).forEach(handleFile)}/>{error&&<div style={{marginTop:16,padding:"10px 16px",borderRadius:10,background:C.redDim,border:"1px solid rgba(239,68,68,0.3)",fontSize:12,color:C.redText,maxWidth:360}}>{error}</div>}{uploads.length>0&&<div style={{marginTop:24,width:"100%",maxWidth:360}}><div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>Uploaded ({uploads.length})</div>{uploads.map((u,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",marginBottom:4,borderRadius:8,background:C.card,border:`1px solid ${C.border}`}}><span style={{fontSize:11,color:C.white}}>{u.dates?.start||"?"}</span><span style={{fontSize:11,color:C.textMuted}}>{u.items.length} products · {fi(u.items.reduce((s,i)=>s+i.gross,0))}</span></div>)}</div>}<div style={{marginTop:16,fontSize:10,color:C.textMuted,textAlign:"center"}}>Upload multiple days for trending & operations</div></div>)}
+function UploadScreen({onDataLoaded,uploads}){
+  const[dragging,setDragging]=useState(false);const[error,setError]=useState(null);const[loading,setLoading]=useState(false);
+  const[pendingFile,setPendingFile]=useState(null);const[pendingData,setPendingData]=useState(null);
+  const[uploadType,setUploadType]=useState("day");const[transactions,setTransactions]=useState("");
+  const fileRef=useRef();
+  const handleFile=useCallback(async(file)=>{
+    if(!file)return;setError(null);setLoading(true);
+    try{const buf=await file.arrayBuffer();const data=parseFile(buf,file.name);data.filename=file.name;
+      // Auto-detect type from date range
+      const s=new Date(data.dates.start+"T12:00:00");const e=new Date(data.dates.end+"T12:00:00");
+      const days=Math.round((e-s)/86400000)+1;
+      if(days===1)setUploadType("day");else if(days<=8)setUploadType("week");else setUploadType("month");
+      setPendingData(data);setPendingFile(file);
+    }catch(e){setError(e.message||"Failed")}
+    setLoading(false);
+  },[]);
+  const confirmUpload=()=>{
+    if(!pendingData)return;
+    const trans=transactions?parseInt(transactions):null;
+    onDataLoaded(pendingData,uploadType,trans);
+    setPendingData(null);setPendingFile(null);setTransactions("");
+  };
+  const cancelUpload=()=>{setPendingData(null);setPendingFile(null);setTransactions("");};
+  const dateLabel=pendingData?.dates?(pendingData.dates.start===pendingData.dates.end?new Date(pendingData.dates.start+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}):`${new Date(pendingData.dates.start+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"})} — ${new Date(pendingData.dates.end+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}`):"";
+  const dayCount=pendingData?.dates?Math.max(1,Math.round((new Date(pendingData.dates.end+"T12:00:00")-new Date(pendingData.dates.start+"T12:00:00"))/86400000)+1):1;
+  const totalGross=pendingData?pendingData.items.reduce((s,i)=>s+i.gross,0):0;
 
-const sectionList=[{id:"dashboard",label:"Dashboard",icon:"📊"},{id:"cats",label:"Categories",icon:"📦"},{id:"trending",label:"Trending",icon:"📈"},{id:"review",label:"Review",icon:"⚠️"},{id:"topsellers",label:"Top Sellers",icon:"💰"},{id:"erosion",label:"Erosion",icon:"🚨"},{id:"missing",label:"Hidden Profit",icon:"🔍"},{id:"ops",label:"Operations",icon:"⚙️"},{id:"coming",label:"Coming Up",icon:"📅"},{id:"ai",label:"AI",icon:"🤖"}];
-const sectionGrid=[{id:"dashboard",icon:"📊",label:"Dashboard",sub:"KPIs & overview"},{id:"cats",icon:"📦",label:"Categories",sub:"Top & bottom per category"},{id:"trending",icon:"📈",label:"Trending",sub:"40%+ vs previous"},{id:"review",icon:"⚠️",label:"Review",sub:"Low margin items"},{id:"topsellers",icon:"💰",label:"Top Sellers",sub:"Best profit contributors"},{id:"erosion",icon:"🚨",label:"Erosion",sub:"Margin alerts"},{id:"missing",icon:"🔍",label:"Hidden Profit",sub:"Missing cost data"},{id:"ops",icon:"⚙️",label:"Operations",sub:"Daily patterns"},{id:"coming",icon:"📅",label:"Coming Up",sub:"Events & prep"},{id:"ai",icon:"🤖",label:"AI Assistant",sub:"Ask about your data"}];
+  return(<div style={{padding:"20px",minHeight:"60vh"}}>
+    <div style={{textAlign:"center",marginBottom:24}}>
+      <div style={{width:56,height:56,borderRadius:14,background:`linear-gradient(135deg,${C.accentLight},${C.green})`,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:24,marginBottom:12}}>📊</div>
+      <div style={{fontSize:18,fontWeight:800,color:C.white,marginBottom:4}}>Upload Sales Data</div>
+      <div style={{fontSize:11,color:C.textMuted}}>ShopMate Item Sales Report (.xls)</div>
+    </div>
+
+    {!pendingData ? (<>
+      {/* File picker */}
+      <div onDragOver={e=>{e.preventDefault();setDragging(true)}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);handleFile(e.dataTransfer.files[0])}} onClick={()=>fileRef.current?.click()} style={{width:"100%",padding:"36px 20px",borderRadius:16,cursor:"pointer",border:`2px dashed ${dragging?C.accentLight:C.border}`,textAlign:"center",background:dragging?C.accentGlow:C.card,transition:"all 0.2s"}}>
+        {loading?<div style={{fontSize:14,color:C.accentLight,fontWeight:600}}>Reading file...</div>:<>
+          <div style={{fontSize:32,marginBottom:10}}>📁</div>
+          <div style={{fontSize:13,color:C.white,fontWeight:600,marginBottom:4}}>Tap to select file</div>
+          <div style={{fontSize:11,color:C.textMuted}}>or drag & drop</div>
+        </>}
+      </div>
+      <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{if(e.target.files[0])handleFile(e.target.files[0])}}/>
+      {error&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.redDim,border:"1px solid rgba(239,68,68,0.3)",fontSize:12,color:C.redText}}>{error}</div>}
+
+      {/* Recent uploads summary */}
+      {uploads.length>0&&<div style={{marginTop:20}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>Recent ({uploads.length} days)</div>
+        {uploads.slice(-5).reverse().map((u,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",marginBottom:4,borderRadius:8,background:C.card,border:`1px solid ${C.border}`}}>
+          <div><span style={{fontSize:11,color:C.white}}>{u.dates?.start}</span>{u.isEstimated&&<span style={{fontSize:9,color:C.orangeText,marginLeft:6}}>EST</span>}</div>
+          <span style={{fontSize:11,color:C.textMuted}}>{fi(u.items.reduce((s,i)=>s+i.gross,0))}</span>
+        </div>)}
+      </div>}
+    </>) : (<>
+      {/* Confirmation step */}
+      <div style={{background:C.card,borderRadius:14,padding:16,border:`1px solid ${C.border}`,marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.white,marginBottom:8}}>📄 {pendingFile?.name}</div>
+        <div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>{dateLabel} · {dayCount} day{dayCount>1?"s":""} · {pendingData.items.length} products · {fi(totalGross)} gross</div>
+      </div>
+
+      {/* Upload type */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>What are you uploading?</div>
+        <div style={{display:"flex",gap:6}}>
+          {[{id:"day",label:"Single Day",desc:"Exact daily figures"},{id:"week",label:"Week",desc:`Divided by ${dayCount} days`},{id:"month",label:"Month",desc:`Divided by ${dayCount} days`}].map(t=>
+            <button key={t.id} onClick={()=>setUploadType(t.id)} style={{flex:1,padding:"10px 8px",borderRadius:10,border:"none",cursor:"pointer",background:uploadType===t.id?C.accentLight:C.surface,textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:uploadType===t.id?C.white:C.textMuted}}>{t.label}</div>
+              <div style={{fontSize:9,color:uploadType===t.id?"rgba(255,255,255,0.7)":C.textMuted,marginTop:2}}>{t.desc}</div>
+            </button>
+          )}
+        </div>
+        {uploadType!=="day"&&<div style={{marginTop:8,padding:10,borderRadius:8,background:C.orangeDim,border:"1px solid rgba(245,158,11,0.2)"}}>
+          <div style={{fontSize:10,color:C.orangeText}}>⚠️ Data will be split evenly across {dayCount} days and marked as estimated. Upload individual days later to replace with exact figures.</div>
+        </div>}
+      </div>
+
+      {/* Transaction count */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.textMuted,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>Transactions (optional)</div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input type="number" value={transactions} onChange={e=>setTransactions(e.target.value)} placeholder={uploadType==="day"?"e.g. 180":"Total for period"} style={{flex:1,padding:"10px 14px",borderRadius:10,background:C.surface,color:C.white,border:`1px solid ${C.border}`,fontSize:13,outline:"none",fontFamily:"'Inter',sans-serif"}}/>
+          {transactions&&<div style={{fontSize:11,color:C.textSecondary,minWidth:80}}>Avg basket: {f(totalGross/(parseInt(transactions)||1))}</div>}
+        </div>
+        <div style={{fontSize:10,color:C.textMuted,marginTop:4}}>From ShopMate Portal dashboard — helps calculate average basket spend</div>
+      </div>
+
+      {/* Confirm / Cancel */}
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={cancelUpload} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:C.textMuted,fontSize:12,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+        <button onClick={confirmUpload} style={{flex:2,padding:"12px",borderRadius:10,border:"none",background:C.accentLight,color:C.white,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          Upload {uploadType==="day"?"Day":uploadType==="week"?"Week":"Month"}
+        </button>
+      </div>
+    </>)}
+  </div>);
+}
+
+// ─── MANAGE UPLOADS SECTION ─────────────────────────────────────
+function ManageUploadsSection({clientId,onRefresh}){
+  const[uploads,setUploads]=useState([]);const[loading,setLoading]=useState(true);const[deleting,setDeleting]=useState(null);
+  useEffect(()=>{if(clientId)(async()=>{setLoading(true);const u=await loadUploadsMeta(clientId);setUploads(u);setLoading(false)})();},[clientId]);
+  const handleDelete=async(upload)=>{
+    if(!confirm(`Delete ${upload.report_date} data? This cannot be undone.`))return;
+    setDeleting(upload.id);
+    const result=await deleteUploadFromSupabase(upload.id);
+    if(result.ok){setUploads(prev=>prev.filter(u=>u.id!==upload.id));if(onRefresh)onRefresh();}
+    setDeleting(null);
+  };
+  // Group by month
+  const months={};uploads.forEach(u=>{const m=u.report_date.slice(0,7);if(!months[m])months[m]={label:new Date(u.report_date+"T12:00:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"}),uploads:[],totalGross:0};months[m].uploads.push(u);months[m].totalGross+=Number(u.total_gross||0);});
+  const monthList=Object.values(months).reverse();
+  return(
+    <SectionCard title="Manage Uploads" icon="📋">
+      {loading&&<div style={{textAlign:"center",padding:20,color:C.textMuted,fontSize:12}}>Loading...</div>}
+      {!loading&&uploads.length===0&&<EmptyState msg="No uploads yet"/>}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        <Stat label="Total Days" value={uploads.length} small/>
+        <Stat label="Actual" value={uploads.filter(u=>!u.is_estimated).length} small/>
+        <Stat label="Estimated" value={uploads.filter(u=>u.is_estimated).length} small/>
+      </div>
+      {monthList.map((month,mi)=>(
+        <div key={mi} style={{marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+            <span style={{fontSize:11,fontWeight:700,color:C.white}}>{month.label}</span>
+            <span style={{fontSize:11,color:C.textMuted}}>{month.uploads.length} days · {fi(month.totalGross)}</span>
+          </div>
+          {month.uploads.map((u,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",marginBottom:3,borderRadius:8,background:C.surface,border:`1px solid ${u.is_estimated?"rgba(245,158,11,0.15)":C.border}`}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:11,color:C.white,fontWeight:600}}>{new Date(u.report_date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</span>
+                  {u.is_estimated&&<Badge type="ALERT">EST</Badge>}
+                </div>
+                <div style={{fontSize:9,color:C.textMuted,marginTop:2}}>
+                  {fi(Number(u.total_gross||0))} · {u.total_qty||0} items
+                  {u.transactions&&` · ${u.transactions} trans · ${f(Number(u.avg_basket||0))} avg`}
+                </div>
+              </div>
+              <button onClick={()=>handleDelete(u)} disabled={deleting===u.id} style={{padding:"4px 10px",borderRadius:6,border:`1px solid rgba(239,68,68,0.3)`,background:C.redDim,color:C.redText,fontSize:10,fontWeight:600,cursor:"pointer",opacity:deleting===u.id?0.5:1}}>
+                {deleting===u.id?"...":"Delete"}
+              </button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </SectionCard>
+  );
+}
+
+const sectionList=[{id:"dashboard",label:"Dashboard",icon:"📊"},{id:"cats",label:"Categories",icon:"📦"},{id:"trending",label:"Trending",icon:"📈"},{id:"review",label:"Review",icon:"⚠️"},{id:"topsellers",label:"Top Sellers",icon:"💰"},{id:"erosion",label:"Erosion",icon:"🚨"},{id:"missing",label:"Hidden Profit",icon:"🔍"},{id:"ops",label:"Operations",icon:"⚙️"},{id:"coming",label:"Coming Up",icon:"📅"},{id:"manage",label:"Uploads",icon:"📋"},{id:"ai",label:"AI",icon:"🤖"}];
+const sectionGrid=[{id:"dashboard",icon:"📊",label:"Dashboard",sub:"KPIs & overview"},{id:"cats",icon:"📦",label:"Categories",sub:"Top & bottom per category"},{id:"trending",icon:"📈",label:"Trending",sub:"40%+ vs previous"},{id:"review",icon:"⚠️",label:"Review",sub:"Low margin items"},{id:"topsellers",icon:"💰",label:"Top Sellers",sub:"Best profit contributors"},{id:"erosion",icon:"🚨",label:"Erosion",sub:"Margin alerts"},{id:"missing",icon:"🔍",label:"Hidden Profit",sub:"Missing cost data"},{id:"ops",icon:"⚙️",label:"Operations",sub:"Daily patterns"},{id:"coming",icon:"📅",label:"Coming Up",sub:"Events & prep"},{id:"manage",icon:"📋",label:"Manage Uploads",sub:"View & delete uploads"},{id:"ai",icon:"🤖",label:"AI Assistant",sub:"Ask about your data"}];
 const bottomNav=[{id:"home",icon:"🏠",label:"Home"},{id:"search",icon:"🔍",label:"Search"},{id:"grid",icon:"⊞",label:"Sections"},{id:"news",icon:"📰",label:"News"}];
 const timeRanges=[{id:"day",label:"Day"},{id:"week",label:"Week"},{id:"month",label:"Month"}];
 
@@ -129,12 +306,22 @@ console.log("Client ID:",client.id);
 const days=await loadFromSupabase(client.id);if(days.length>0)setAllDays(days);setSbStatus(days.length>0?`${days.length} days loaded`:"Ready");}catch(e){console.error("Init:",e);setSbStatus("Error: "+e.message);}
 setLoading(false);})();},[]);
 
-const addDay=useCallback(async(data)=>{
-  // Add to local state
-  setAllDays(prev=>{if(prev.find(d=>d.dates?.start===data.dates?.start))return prev.map(d=>d.dates?.start===data.dates?.start?data:d);return[...prev,data].sort((a,b)=>(a.dates?.start||"").localeCompare(b.dates?.start||""))});
+const addDay=useCallback(async(data,uploadType,transactions)=>{
   // Push to Supabase if we have a client
-  if(clientId){setSbStatus("Saving...");const result=await pushToSupabase(clientId,data);setSbStatus(result.ok?`✓ Saved ${result.rows} rows`:`✗ ${result.error}`);setTimeout(()=>setSbStatus(""),3000);}
-},[clientId]);const currentData=useMemo(()=>{if(!allDays.length)return null;if(timeRange==="day")return allDays[allDays.length-1];return{items:allDays.flatMap(d=>d.items),dates:{start:allDays[0].dates?.start,end:allDays[allDays.length-1].dates?.end}}},[allDays,timeRange]);const analysis=useMemo(()=>currentData?analyzeData(allDays,currentData):null,[currentData,allDays]);const hour=new Date().getHours();const greeting=hour<12?"Good morning":hour<18?"Good afternoon":"Good evening";
+  if(clientId){setSbStatus("Saving...");const result=await pushToSupabase(clientId,data,uploadType||"day",transactions);
+    if(result.ok){setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted>1?"s":""} saved`);
+      // Reload all data from Supabase to get clean state
+      const days=await loadFromSupabase(clientId);setAllDays(days);
+    }else{setSbStatus(`✗ ${result.error}`);}
+    setTimeout(()=>setSbStatus(""),4000);
+  }else{
+    // No Supabase — just add locally
+    setAllDays(prev=>{if(prev.find(d=>d.dates?.start===data.dates?.start))return prev.map(d=>d.dates?.start===data.dates?.start?data:d);return[...prev,data].sort((a,b)=>(a.dates?.start||"").localeCompare(b.dates?.start||""))});
+  }
+  setActiveTab("home");setActiveSection("dashboard");
+},[clientId]);
+
+const refreshData=useCallback(async()=>{if(clientId){const days=await loadFromSupabase(clientId);setAllDays(days);}},[clientId]);const currentData=useMemo(()=>{if(!allDays.length)return null;if(timeRange==="day")return allDays[allDays.length-1];return{items:allDays.flatMap(d=>d.items),dates:{start:allDays[0].dates?.start,end:allDays[allDays.length-1].dates?.end}}},[allDays,timeRange]);const analysis=useMemo(()=>currentData?analyzeData(allDays,currentData):null,[currentData,allDays]);const hour=new Date().getHours();const greeting=hour<12?"Good morning":hour<18?"Good afternoon":"Good evening";
 
 if(loading)return(<div style={{background:C.bg,minHeight:"100vh",maxWidth:480,margin:"0 auto",fontFamily:"'Inter','SF Pro Display',-apple-system,sans-serif",color:C.textPrimary,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center"}}><div style={{fontSize:24,marginBottom:12}}>📊</div><div style={{fontSize:14,color:C.white,fontWeight:600}}>Loading...</div><div style={{fontSize:11,color:C.textMuted,marginTop:4}}>Connecting to Supabase</div></div><style>{globalCSS}</style></div>);
 
@@ -142,7 +329,7 @@ if(!analysis)return(<div style={{background:C.bg,minHeight:"100vh",maxWidth:480,
 
 const{summary}=analysis;const dateLabel=currentData.dates?(timeRange==="day"?new Date(currentData.dates.start+"T12:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"}):`${allDays.length} days`):"";const rangeLabel=timeRange==="day"?"Today":timeRange==="week"?"This Week":"This Month";
 
-const renderSection=()=>{switch(activeSection){case"dashboard":return<DashboardSection analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel}/>;case"cats":return<CategoriesSection analysis={analysis}/>;case"trending":return<TrendingSection analysis={analysis}/>;case"review":return<ReviewSection analysis={analysis}/>;case"topsellers":return<TopSellersSection analysis={analysis}/>;case"erosion":return<ErosionSection analysis={analysis}/>;case"missing":return<MissingDataSection analysis={analysis}/>;case"ops":return<OpsSection analysis={analysis} allDays={allDays}/>;case"coming":return<ComingUpSection/>;case"ai":return<AIChatSection analysis={analysis} allDays={allDays}/>;default:return<DashboardSection analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel}/>}};
+const renderSection=()=>{switch(activeSection){case"dashboard":return<DashboardSection analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel}/>;case"cats":return<CategoriesSection analysis={analysis}/>;case"trending":return<TrendingSection analysis={analysis}/>;case"review":return<ReviewSection analysis={analysis}/>;case"topsellers":return<TopSellersSection analysis={analysis}/>;case"erosion":return<ErosionSection analysis={analysis}/>;case"missing":return<MissingDataSection analysis={analysis}/>;case"ops":return<OpsSection analysis={analysis} allDays={allDays}/>;case"coming":return<ComingUpSection/>;case"manage":return<ManageUploadsSection clientId={clientId} onRefresh={refreshData}/>;case"ai":return<AIChatSection analysis={analysis} allDays={allDays}/>;default:return<DashboardSection analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel}/>}};
 
 return(<div style={{background:C.bg,minHeight:"100vh",maxWidth:480,margin:"0 auto",fontFamily:"'Inter','SF Pro Display',-apple-system,sans-serif",color:C.textPrimary,position:"relative",overflow:"hidden"}}><div style={{position:"fixed",top:-150,right:-100,width:400,height:400,background:"radial-gradient(circle,rgba(46,80,144,0.15) 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/><div style={{padding:"20px 20px 12px",position:"relative",zIndex:1,background:"linear-gradient(180deg,rgba(46,80,144,0.08) 0%,transparent 100%)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}><div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.accentLight},${C.green})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:900,color:C.white}}>S</div><span style={{fontSize:15,fontWeight:800,color:C.white,letterSpacing:.5}}>ShopMate Sales</span></div><div style={{fontSize:13,color:C.textSecondary}}>{greeting}{clientName?`, ${clientName}`:""}</div><div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{dateLabel} · {allDays.length} day{allDays.length!==1?"s":""}{sbStatus?` · ${sbStatus}`:""}</div></div><div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}><div style={{padding:"4px 10px",borderRadius:20,fontSize:10,fontWeight:700,background:C.greenDim,color:C.greenText,border:"1px solid rgba(34,197,94,0.2)"}}>● LIVE</div><button onClick={()=>setActiveTab("upload")} style={{padding:"4px 10px",borderRadius:8,background:C.surface,border:`1px solid ${C.border}`,color:C.textMuted,fontSize:10,fontWeight:600,cursor:"pointer"}}>+ Upload</button></div></div><div style={{display:"flex",gap:4,marginBottom:12}}>{timeRanges.map(tr=><button key={tr.id} onClick={()=>setTimeRange(tr.id)} style={{flex:1,padding:"6px 0",borderRadius:8,border:"none",fontSize:11,fontWeight:700,cursor:"pointer",background:timeRange===tr.id?C.accentLight:C.surface,color:timeRange===tr.id?C.white:C.textMuted}}>{tr.label}</button>)}</div><div style={{display:"flex",gap:8,padding:"12px 14px",borderRadius:12,background:`linear-gradient(135deg,${C.card},rgba(46,80,144,0.1))`,border:`1px solid ${C.border}`,boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}}><Stat label="Revenue" value={fi(summary.totalGross)} small/><div style={{width:1,background:C.border}}/><Stat label="Profit" value={fi(summary.trackedProfit)} small/><div style={{width:1,background:C.border}}/><Stat label="Margin" value={pct(summary.trackedMargin)} small/></div></div>{activeTab==="home"&&<div style={{display:"flex",gap:6,padding:"12px 20px",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",position:"relative",zIndex:1}}>{sectionList.map(s=><button key={s.id} onClick={()=>setActiveSection(s.id)} style={{padding:"6px 14px",borderRadius:20,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap",transition:"all 0.2s",background:activeSection===s.id?C.accentLight:C.card,color:activeSection===s.id?C.white:C.textMuted,boxShadow:activeSection===s.id?"0 2px 12px rgba(59,111,212,0.3)":"none"}}>{s.icon} {s.label}</button>)}</div>}<div style={{padding:"8px 16px 100px",position:"relative",zIndex:1}}>{activeTab==="home"&&renderSection()}{activeTab==="search"&&<SearchView analysis={analysis}/>}{activeTab==="grid"&&<div style={{padding:"8px 0"}}><div style={{fontSize:15,fontWeight:800,color:C.white,marginBottom:16,paddingLeft:4}}>Sections</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>{sectionGrid.map(s=><button key={s.id} onClick={()=>{setActiveSection(s.id);setActiveTab("home")}} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 14px",textAlign:"left",cursor:"pointer"}}><span style={{fontSize:24,display:"block",marginBottom:8}}>{s.icon}</span><div style={{fontSize:13,fontWeight:700,color:C.white,marginBottom:4}}>{s.label}</div><div style={{fontSize:10,color:C.textMuted,lineHeight:1.3}}>{s.sub}</div></button>)}</div></div>}{activeTab==="news"&&<NewsSection/>}{activeTab==="upload"&&<UploadScreen onDataLoaded={addDay} uploads={allDays}/>}</div><div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:10,background:`linear-gradient(180deg,transparent,${C.bg} 20%)`,padding:"20px 16px 12px"}}><div style={{display:"flex",justifyContent:"space-around",alignItems:"center",padding:"10px 0",borderRadius:20,background:C.card,border:`1px solid ${C.border}`,boxShadow:"0 -4px 24px rgba(0,0,0,0.4)"}}>{bottomNav.map(n=><button key={n.id} onClick={()=>{setActiveTab(n.id);if(n.id==="home")setActiveSection("dashboard")}} style={{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,opacity:activeTab===n.id?1:.5,transition:"opacity 0.2s"}}><span style={{fontSize:n.id==="grid"?22:20}}>{n.icon}</span><span style={{fontSize:9,fontWeight:700,letterSpacing:.3,color:activeTab===n.id?C.accentLight:C.textMuted}}>{n.label}</span></button>)}</div></div><style>{globalCSS}</style></div>)}
 
