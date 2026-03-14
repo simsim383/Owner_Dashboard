@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { C, Stat, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
-import { getOwnerIdFromURL, getOrCreateClient, pushToSupabase, loadFromSupabase } from "./supabase.js";
+import { getOwnerIdFromURL, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
 import { analyzeData } from "./analysis.js";
 import Dashboard from "./Dashboard.jsx";
 import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
@@ -44,6 +44,157 @@ const bottomNav = [
 
 const timeRanges = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }, { id: "month", label: "Month" }];
 
+// ─── NEW OWNER SETUP FLOW ───────────────────────────────────────
+function NewOwnerSetup() {
+  const [step, setStep] = useState(1); // 1=invite, 2=choose ID + PIN, 3=done
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteMsg, setInviteMsg] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [ownerId, setOwnerId] = useState("");
+  const [pin, setPin2] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
+  const [idMsg, setIdMsg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [finalId, setFinalId] = useState("");
+
+  const baseUrl = window.location.origin;
+
+  const handleInvite = async () => {
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) { setInviteMsg("Enter your invite code"); return; }
+    setChecking(true); setInviteMsg(null);
+    try {
+      const result = await checkInviteCode(code);
+      if (result.valid) { setStep(2); }
+      else { setInviteMsg(result.error || "Invalid code"); }
+    } catch (e) { setInviteMsg("Could not verify — check connection"); }
+    setChecking(false);
+  };
+
+  const handleCreate = async () => {
+    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!id || id.length < 3) { setIdMsg("ID must be at least 3 characters"); return; }
+    if (pin.length !== 4) { setIdMsg("PIN must be 4 digits"); return; }
+    if (pin !== pinConfirm) { setIdMsg("PINs don't match"); return; }
+    setSaving(true); setIdMsg(null);
+    try {
+      await claimOwnerId(id, inviteCode.trim().toUpperCase());
+      // Set PIN on the new client
+      const client = await getOrCreateClient(id);
+      if (client) await setPin(client.id, pin);
+      localStorage.setItem(`shopmate_pin_${client.id}`, pin);
+      setFinalId(id);
+      setStep(3);
+    } catch (e) {
+      const msg = e.message || "";
+      if (msg.includes("already taken") || msg.includes("duplicate")) {
+        setIdMsg("That ID is taken — try something more specific");
+      } else {
+        setIdMsg("Setup failed: " + msg);
+      }
+    }
+    setSaving(false);
+  };
+
+  const inp = { width: "100%", padding: "14px 16px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 16, outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 4 }}>ShopMate Sales</div>
+        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>Owner Dashboard Setup</div>
+
+        {step === 1 && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 6 }}>Enter your invite code</div>
+            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.5 }}>You should have received a unique code. Each code can only be used once.</div>
+            <input
+              style={{ ...inp, textTransform: "uppercase", letterSpacing: 2, fontWeight: 700 }}
+              value={inviteCode}
+              onChange={e => { setInviteCode(e.target.value.toUpperCase()); setInviteMsg(null); }}
+              onKeyDown={e => { if (e.key === "Enter") handleInvite(); }}
+              placeholder="e.g. HORDEN-2026"
+              autoFocus
+            />
+            {inviteMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{inviteMsg}</div>}
+            <button onClick={handleInvite} disabled={checking || !inviteCode.trim()} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: inviteCode.trim() ? C.accentLight : C.surface, color: inviteCode.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+              {checking ? "Checking..." : "Continue →"}
+            </button>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 6 }}>Choose your ID & set PIN</div>
+            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.5 }}>Your ID becomes your permanent link. Use your business name.</div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
+            <input
+              style={inp}
+              value={ownerId}
+              onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }}
+              placeholder="e.g. londis-horden"
+              autoFocus
+            />
+            {ownerId && <div style={{ fontSize: 12, color: C.accentLight, marginTop: -8, marginBottom: 12 }}>🔗 {baseUrl}/{ownerId}</div>}
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
+            <input
+              type="tel" inputMode="numeric" maxLength={4}
+              style={{ ...inp, letterSpacing: 8, textAlign: "center", fontSize: 22, fontWeight: 800 }}
+              value={pin}
+              onChange={e => { setPin2(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }}
+              placeholder="• • • •"
+            />
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
+            <input
+              type="tel" inputMode="numeric" maxLength={4}
+              style={{ ...inp, letterSpacing: 8, textAlign: "center", fontSize: 22, fontWeight: 800 }}
+              value={pinConfirm}
+              onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }}
+              onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }}
+              placeholder="• • • •"
+            />
+
+            {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
+
+            <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+              {saving ? "Setting up..." : "Create My Dashboard →"}
+            </button>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ fontSize: 28, textAlign: "center", marginBottom: 12 }}>🎉</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.white, marginBottom: 8, textAlign: "center" }}>You're all set!</div>
+            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20, lineHeight: 1.5, textAlign: "center" }}>Bookmark the link below — it's your permanent dashboard. Your PIN protects it on new devices.</div>
+
+            <div style={{ background: C.accentGlow, borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid rgba(59,111,212,0.2)" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.accentLight, marginBottom: 6 }}>🔗 Your Dashboard Link</div>
+              <div style={{ fontSize: 14, color: C.white, fontWeight: 600, wordBreak: "break-all", lineHeight: 1.5 }}>{baseUrl}/{finalId}</div>
+              <button onClick={() => navigator.clipboard?.writeText(`${baseUrl}/${finalId}`)} style={{ marginTop: 10, background: C.accentLight, color: C.white, border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Copy Link</button>
+            </div>
+
+            <div style={{ background: C.orangeDim, borderRadius: 12, padding: 14, marginBottom: 20, border: "1px solid rgba(245,158,11,0.2)" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.orangeText }}>⚠️ Save this link now</div>
+              <div style={{ fontSize: 12, color: C.orangeText, marginTop: 4, lineHeight: 1.5 }}>Add it to your home screen. Your invite code has been used and cannot be reused.</div>
+            </div>
+
+            <a href={`${baseUrl}/${finalId}`} style={{ display: "block", width: "100%", padding: "14px", borderRadius: 12, background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, textAlign: "center", textDecoration: "none", boxSizing: "border-box" }}>
+              Go to Dashboard →
+            </a>
+          </div>
+        )}
+      </div>
+      <style>{globalCSS}</style>
+    </div>
+  );
+}
+
 export default function App() {
   const [allDays, setAllDays] = useState([]);
   const [activeSection, setActiveSection] = useState("dashboard");
@@ -54,8 +205,13 @@ export default function App() {
   const [sbStatus, setSbStatus] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [isNewClient, setIsNewClient] = useState(false);
+  const [confirmPin, setConfirmPin] = useState("");
 
-  // On mount: get owner from URL, load from Supabase
+  // On mount: get owner from URL, check PIN
   useEffect(() => {
     (async () => {
       const ownerId = getOwnerIdFromURL();
@@ -64,13 +220,55 @@ export default function App() {
         const client = await getOrCreateClient(ownerId);
         if (!client) { setSbStatus("Client error"); setLoading(false); return; }
         setClientId(client.id); setClientName(client.name || ownerId);
-        const days = await loadFromSupabase(client.id);
-        if (days.length > 0) setAllDays(days);
-        setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
+        // Check if PIN is saved in localStorage
+        const savedPin = localStorage.getItem(`shopmate_pin_${client.id}`);
+        if (savedPin) {
+          const valid = await verifyPin(client.id, savedPin);
+          if (valid) {
+            setAuthenticated(true);
+            const days = await loadFromSupabase(client.id);
+            if (days.length > 0) setAllDays(days);
+            setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
+          }
+        }
+        // Check if client has a PIN set
+        if (!client.pin) setIsNewClient(true);
       } catch (e) { console.error("Init:", e); setSbStatus("Error: " + e.message); }
       setLoading(false);
     })();
   }, []);
+
+  const handlePinSubmit = async () => {
+    if (!clientId) return;
+    if (isNewClient) {
+      // Setting up new PIN
+      if (pinInput.length !== 4) { setPinError("PIN must be 4 digits"); return; }
+      if (pinInput !== confirmPin) { setPinError("PINs don't match"); return; }
+      await setPin(clientId, pinInput);
+      localStorage.setItem(`shopmate_pin_${clientId}`, pinInput);
+      setAuthenticated(true);
+      setLoading(true);
+      const days = await loadFromSupabase(clientId);
+      if (days.length > 0) setAllDays(days);
+      setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
+      setLoading(false);
+    } else {
+      // Verifying existing PIN
+      const valid = await verifyPin(clientId, pinInput);
+      if (valid) {
+        localStorage.setItem(`shopmate_pin_${clientId}`, pinInput);
+        setAuthenticated(true);
+        setLoading(true);
+        const days = await loadFromSupabase(clientId);
+        if (days.length > 0) setAllDays(days);
+        setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
+        setLoading(false);
+      } else {
+        setPinError("Incorrect PIN");
+        setPinInput("");
+      }
+    }
+  };
 
   const addDay = useCallback(async (data, uploadType, transactions) => {
     if (clientId) {
@@ -122,15 +320,69 @@ export default function App() {
     </div>
   );
 
+  // PIN entry screen
+  if (clientId && !authenticated) return (
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 320, textAlign: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.white, marginBottom: 4 }}>ShopMate Sales</div>
+        <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 24 }}>{clientName}</div>
+
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 12 }}>
+          {isNewClient ? "Set your 4-digit PIN" : "Enter your PIN"}
+        </div>
+
+        <input
+          type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={4}
+          value={pinInput}
+          onChange={e => { setPinInput(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinError(""); }}
+          onKeyDown={e => { if (e.key === "Enter" && pinInput.length === 4) { if (isNewClient && !confirmPin) return; handlePinSubmit(); } }}
+          placeholder="• • • •"
+          autoFocus
+          style={{ width: "100%", padding: "16px", borderRadius: 14, background: C.surface, color: C.white, border: `2px solid ${pinError ? "rgba(239,68,68,0.5)" : C.border}`, fontSize: 28, fontWeight: 800, textAlign: "center", letterSpacing: 12, outline: "none", fontFamily: "'Inter', sans-serif", marginBottom: 12 }}
+        />
+
+        {isNewClient && pinInput.length === 4 && (
+          <>
+            <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 8 }}>Confirm your PIN</div>
+            <input
+              type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={4}
+              value={confirmPin}
+              onChange={e => { setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinError(""); }}
+              onKeyDown={e => { if (e.key === "Enter" && confirmPin.length === 4) handlePinSubmit(); }}
+              placeholder="• • • •"
+              style={{ width: "100%", padding: "16px", borderRadius: 14, background: C.surface, color: C.white, border: `2px solid ${C.border}`, fontSize: 28, fontWeight: 800, textAlign: "center", letterSpacing: 12, outline: "none", fontFamily: "'Inter', sans-serif", marginBottom: 12 }}
+            />
+          </>
+        )}
+
+        {pinError && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12, fontWeight: 600 }}>{pinError}</div>}
+
+        <button
+          onClick={handlePinSubmit}
+          disabled={pinInput.length !== 4 || (isNewClient && confirmPin.length !== 4)}
+          style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: pinInput.length === 4 ? C.accentLight : C.surface, color: pinInput.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer" }}
+        >
+          {isNewClient ? "Set PIN & Enter" : "Enter"}
+        </button>
+
+        {isNewClient && (
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 16, lineHeight: 1.5 }}>
+            This PIN secures your dashboard. You'll need it each time you open the app on a new device.
+          </div>
+        )}
+      </div>
+      <style>{globalCSS}</style>
+    </div>
+  );
+
   // No data — upload screen
+  // No owner ID — show setup flow
+  if (!clientId && !loading) return <NewOwnerSetup />;
+
+  // Authenticated but no data — upload screen
   if (!analysis) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary }}>
-      {!clientId && (
-        <div style={{ padding: "12px 20px", background: C.orangeDim, borderBottom: "1px solid rgba(245,158,11,0.2)" }}>
-          <div style={{ fontSize: 12, color: C.orangeText, fontWeight: 600 }}>⚠️ No owner ID in URL — data won't save</div>
-          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Add ?owner=YOUR_ID to the URL for persistence</div>
-        </div>
-      )}
       <UploadScreen onDataLoaded={addDay} uploads={allDays} />
       <style>{globalCSS}</style>
     </div>
