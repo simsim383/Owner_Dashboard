@@ -22,7 +22,38 @@ async function sbDelete(t, p) {
 }
 
 export function getOwnerIdFromURL() {
-  return new URLSearchParams(window.location.search).get("owner") || null;
+  // 1. Check query param (backwards compatible): ?owner=londis-horden
+  const qp = new URLSearchParams(window.location.search).get("owner");
+  if (qp) return qp;
+  // 2. Check path: /londis-horden
+  const path = window.location.pathname.replace(/^\//, "").replace(/\/$/, "");
+  if (path && path !== "" && !path.includes("/") && !path.includes(".")) return path;
+  return null;
+}
+
+export async function verifyPin(clientId, pin) {
+  if (!clientId || !pin) return false;
+  try {
+    const rows = await sbGet("clients", `id=eq.${encodeURIComponent(clientId)}&select=pin`);
+    if (!rows.length) return false;
+    // If no PIN set yet, any PIN is accepted (first-time setup)
+    if (!rows[0].pin) return true;
+    return rows[0].pin === pin;
+  } catch (e) {
+    console.error("PIN verify:", e);
+    return false;
+  }
+}
+
+export async function setPin(clientId, pin) {
+  if (!clientId || !pin) return;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${encodeURIComponent(clientId)}`, {
+      method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
+      body: JSON.stringify({ pin }),
+    });
+    if (!r.ok) throw new Error("Failed to set PIN");
+  } catch (e) { console.error("Set PIN:", e); }
 }
 
 export async function getOrCreateClient(ownerId) {
@@ -131,4 +162,34 @@ export async function loadFromSupabase(clientId) {
     }
     return allDays;
   } catch (e) { console.error("Load from Supabase:", e); return []; }
+}
+
+// ─── ONBOARDING ─────────────────────────────────────────────────
+export async function checkInviteCode(code) {
+  const rows = await sbGet("invite_codes", `code=eq.${encodeURIComponent(code)}&limit=1`);
+  if (!rows.length) return { valid: false, error: "Invalid code" };
+  if (rows[0].used) return { valid: false, error: "Code already used" };
+  return { valid: true };
+}
+
+export async function claimOwnerId(id, inviteCode) {
+  // Check not taken
+  const [takenOwner, takenClient] = await Promise.all([
+    sbGet("owner_ids", `id=eq.${encodeURIComponent(id)}&limit=1`),
+    sbGet("clients", `name=eq.${encodeURIComponent(id)}&limit=1`),
+  ]);
+  if (takenOwner.length > 0 || takenClient.length > 0) {
+    throw new Error("ID already taken");
+  }
+  // Claim it
+  await sbPost("owner_ids", [{ id, created_at: new Date().toISOString() }]);
+  // Mark invite code as used
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/invite_codes?code=eq.${encodeURIComponent(inviteCode)}`, {
+    method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
+    body: JSON.stringify({ used: true, used_by: id, used_at: new Date().toISOString() }),
+  });
+  if (!r.ok) throw new Error("Failed to mark code as used");
+  // Create client record with PIN placeholder
+  await sbPost("clients", [{ name: id, owner_name: id }]);
+  return { ok: true };
 }
