@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { C, Stat, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
-import { getOwnerIdFromURL, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
+import { getSavedOwnerId, saveOwnerId, getSavedPin, savePin, logout, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
 import { analyzeData } from "./analysis.js";
 import Dashboard from "./Dashboard.jsx";
 import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
@@ -82,7 +82,9 @@ function NewOwnerSetup() {
       // Set PIN on the new client
       const client = await getOrCreateClient(id);
       if (client) await setPin(client.id, pin);
-      localStorage.setItem(`shopmate_pin_${client.id}`, pin);
+      // Save to localStorage — this is how the app remembers who you are
+      saveOwnerId(id);
+      savePin(id, pin);
       setFinalId(id);
       setStep(3);
     } catch (e) {
@@ -174,19 +176,18 @@ function NewOwnerSetup() {
             <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20, lineHeight: 1.5, textAlign: "center" }}>Bookmark the link below — it's your permanent dashboard. Your PIN protects it on new devices.</div>
 
             <div style={{ background: C.accentGlow, borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid rgba(59,111,212,0.2)" }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.accentLight, marginBottom: 6 }}>🔗 Your Dashboard Link</div>
-              <div style={{ fontSize: 14, color: C.white, fontWeight: 600, wordBreak: "break-all", lineHeight: 1.5 }}>{baseUrl}/{finalId}</div>
-              <button onClick={() => navigator.clipboard?.writeText(`${baseUrl}/${finalId}`)} style={{ marginTop: 10, background: C.accentLight, color: C.white, border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Copy Link</button>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.accentLight, marginBottom: 6 }}>🔗 Your Dashboard</div>
+              <div style={{ fontSize: 14, color: C.white, fontWeight: 600, lineHeight: 1.5 }}>Bookmark this page to your home screen. Your login is saved to this device.</div>
             </div>
 
             <div style={{ background: C.orangeDim, borderRadius: 12, padding: 14, marginBottom: 20, border: "1px solid rgba(245,158,11,0.2)" }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.orangeText }}>⚠️ Save this link now</div>
-              <div style={{ fontSize: 12, color: C.orangeText, marginTop: 4, lineHeight: 1.5 }}>Add it to your home screen. Your invite code has been used and cannot be reused.</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.orangeText }}>⚠️ Add to Home Screen now</div>
+              <div style={{ fontSize: 12, color: C.orangeText, marginTop: 4, lineHeight: 1.5 }}>Tap the share button below and select "Add to Home Screen". Your invite code has been used.</div>
             </div>
 
-            <a href={`${baseUrl}/${finalId}`} style={{ display: "block", width: "100%", padding: "14px", borderRadius: 12, background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, textAlign: "center", textDecoration: "none", boxSizing: "border-box" }}>
+            <button onClick={() => window.location.reload()} style={{ display: "block", width: "100%", padding: "14px", borderRadius: 12, background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, textAlign: "center", border: "none", cursor: "pointer" }}>
               Go to Dashboard →
-            </a>
+            </button>
           </div>
         )}
       </div>
@@ -211,17 +212,17 @@ export default function App() {
   const [isNewClient, setIsNewClient] = useState(false);
   const [confirmPin, setConfirmPin] = useState("");
 
-  // On mount: get owner from URL, check PIN
+  // On mount: check localStorage for saved identity
   useEffect(() => {
     (async () => {
-      const ownerId = getOwnerIdFromURL();
+      const ownerId = getSavedOwnerId();
       if (!ownerId) { setLoading(false); return; }
       try {
         const client = await getOrCreateClient(ownerId);
         if (!client) { setSbStatus("Client error"); setLoading(false); return; }
         setClientId(client.id); setClientName(client.name || ownerId);
-        // Check if PIN is saved in localStorage
-        const savedPin = localStorage.getItem(`shopmate_pin_${client.id}`);
+        // Check saved PIN
+        const savedPin = getSavedPin();
         if (savedPin) {
           const valid = await verifyPin(client.id, savedPin);
           if (valid) {
@@ -231,7 +232,6 @@ export default function App() {
             setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
           }
         }
-        // Check if client has a PIN set
         if (!client.pin) setIsNewClient(true);
       } catch (e) { console.error("Init:", e); setSbStatus("Error: " + e.message); }
       setLoading(false);
@@ -240,12 +240,12 @@ export default function App() {
 
   const handlePinSubmit = async () => {
     if (!clientId) return;
+    const ownerId = getSavedOwnerId();
     if (isNewClient) {
-      // Setting up new PIN
       if (pinInput.length !== 4) { setPinError("PIN must be 4 digits"); return; }
       if (pinInput !== confirmPin) { setPinError("PINs don't match"); return; }
       await setPin(clientId, pinInput);
-      localStorage.setItem(`shopmate_pin_${clientId}`, pinInput);
+      savePin(ownerId, pinInput);
       setAuthenticated(true);
       setLoading(true);
       const days = await loadFromSupabase(clientId);
@@ -253,10 +253,9 @@ export default function App() {
       setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
       setLoading(false);
     } else {
-      // Verifying existing PIN
       const valid = await verifyPin(clientId, pinInput);
       if (valid) {
-        localStorage.setItem(`shopmate_pin_${clientId}`, pinInput);
+        savePin(ownerId, pinInput);
         setAuthenticated(true);
         setLoading(true);
         const days = await loadFromSupabase(clientId);
@@ -377,7 +376,7 @@ export default function App() {
   );
 
   // No data — upload screen
-  // No owner ID — show setup flow
+  // No saved owner — show setup flow
   if (!clientId && !loading) return <NewOwnerSetup />;
 
   // Authenticated but no data — upload screen
