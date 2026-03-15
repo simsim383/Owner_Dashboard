@@ -122,11 +122,16 @@ export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
     return { date: d.dates?.start, dayName: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" }) : "?", qty: match?.qty || 0, gross: match?.gross || 0, profit: match?.grossProfit || null };
   });
 
-  // Last week qty = sum from 8-14 days ago in the data
-  const last7 = dailyHistory.slice(Math.max(0, dailyHistory.length - 14), Math.max(0, dailyHistory.length - 7));
-  const lastWeekQty = last7.length > 0 ? last7.reduce((s, d) => s + d.qty, 0) : null;
+  // Previous period qty depends on the view mode
+  const isMonth = timeRange === "This Month";
+  const prevLabel = isMonth ? "Last Month" : "Last Week";
+  const prevSliceStart = isMonth ? Math.max(0, dailyHistory.length - 60) : Math.max(0, dailyHistory.length - 14);
+  const prevSliceEnd = isMonth ? Math.max(0, dailyHistory.length - 30) : Math.max(0, dailyHistory.length - 7);
+  const prevDays = dailyHistory.slice(prevSliceStart, prevSliceEnd);
+  const prevQty = prevDays.length > 0 ? prevDays.reduce((s, d) => s + d.qty, 0) : null;
   const avgDailyQty = dailyHistory.length > 0 ? (dailyHistory.reduce((s, d) => s + d.qty, 0) / dailyHistory.length).toFixed(1) : "—";
-  const qtyChange = lastWeekQty != null && lastWeekQty > 0 ? Math.round(((qty - lastWeekQty) / lastWeekQty) * 100) : null;
+  const qtyChange = prevQty != null && prevQty > 0 ? Math.round(((qty - prevQty) / prevQty) * 100) : null;
+  const weeklyQty = dailyHistory.length >= 7 ? dailyHistory.slice(-7).reduce((s, d) => s + d.qty, 0) : null;
 
   const statBox = (label, value, color, sub) => (
     <div style={{ flex: 1, minWidth: 80, background: C.card, borderRadius: 10, padding: "12px 10px", border: `1px solid ${C.border}`, textAlign: "center" }}>
@@ -151,20 +156,20 @@ export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 40px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
           {statBox("Qty Sold", qty)}
-          {statBox("Last Week", lastWeekQty != null ? lastWeekQty : "—", lastWeekQty != null ? C.textSecondary : C.textMuted)}
+          {statBox(prevLabel, prevQty != null ? prevQty : "—", prevQty != null ? C.textSecondary : C.textMuted)}
           {statBox("Revenue", fi(revenue))}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
           {statBox("Profit", profit != null ? f(profit) : "—", profit > 0 ? C.greenText : profit < 0 ? C.redText : C.textMuted)}
           {statBox("Margin", margin != null ? pct(margin) : "—", margin >= 25 ? C.greenText : margin > 0 && margin < 15 ? C.redText : C.white)}
-          {statBox("Avg/Day", avgDailyQty)}
+          {statBox("Per Week", weeklyQty != null ? weeklyQty : avgDailyQty !== "—" ? Math.round(parseFloat(avgDailyQty) * 7) : "—")}
         </div>
 
         {qtyChange != null && (
           <div style={{ padding: "10px 14px", borderRadius: 10, background: qtyChange >= 0 ? C.greenDim : C.redDim, border: `1px solid ${qtyChange >= 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14 }}>{qtyChange >= 0 ? "📈" : "📉"}</span>
             <span style={{ fontSize: 13, fontWeight: 600, color: qtyChange >= 0 ? C.greenText : C.redText }}>
-              {qtyChange >= 0 ? "+" : ""}{qtyChange}% vs last week ({lastWeekQty} → {qty})
+              {qtyChange >= 0 ? "+" : ""}{qtyChange}% vs {prevLabel.toLowerCase()} ({prevQty} → {qty})
             </span>
           </div>
         )}
