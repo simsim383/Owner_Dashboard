@@ -12,10 +12,26 @@ export default function Dashboard({ analysis, dates, allDays, timeRange }) {
     : `${new Date(dates.start + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })} — ${new Date(dates.end + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`) : "";
 
   const chartData = allDays.map(d => ({
-    label: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "?",
+    label: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "?",
+    date: d.dates?.start || "",
+    dayName: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long" }) : "?",
     revenue: d.items.reduce((s, i) => s + i.gross, 0),
     profit: d.items.filter(i => i.hasCost).reduce((s, i) => s + (i.grossProfit || 0), 0),
   }));
+
+  // Custom tooltip with date and day
+  const DashTip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const d = payload[0]?.payload;
+    return (
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12 }}>
+        <div style={{ color: C.white, fontWeight: 700, marginBottom: 4 }}>{d.dayName} — {d.date}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ color: p.color || C.accentLight, fontWeight: 700, marginTop: 2 }}>{p.name}: {fi(p.value)}</div>
+        ))}
+      </div>
+    );
+  };
 
   const prevDay = allDays.length > 1 ? allDays[allDays.length - 2] : null;
   const prevGross = prevDay ? prevDay.items.reduce((s, i) => s + i.gross, 0) : null;
@@ -53,7 +69,7 @@ export default function Dashboard({ analysis, dates, allDays, timeRange }) {
                 <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `£${v}`} />
-                <Tooltip content={<ChartTip />} />
+                <Tooltip content={<DashTip />} />
                 <Area type="monotone" dataKey="revenue" stroke={C.accentLight} fill="rgba(59,111,212,0.15)" name="Revenue" />
                 <Area type="monotone" dataKey="profit" stroke={C.green} fill="rgba(34,197,94,0.1)" name="Profit" />
               </AreaChart>
