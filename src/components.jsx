@@ -107,8 +107,8 @@ export const InsightBox = ({ title, icon, children, color }) => (
 );
 
 // ─── PRODUCT DETAIL OVERLAY ─────────────────────────────────────
-// Full-screen overlay matching Londis Intelligence ProductDetail
 export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
+  const [showDaily, setShowDaily] = useState(false);
   if (!product) return null;
   const name = product.product;
   const cat = product.category || product.cat || "";
@@ -117,30 +117,27 @@ export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
   const profit = product.totalProfit ?? product.grossProfit ?? null;
   const margin = product.avgMargin ?? product.grossMargin ?? null;
 
-  // Calculate historical data from allDays
   const dailyHistory = (allDays || []).map(d => {
     const match = d.items.find(i => i.barcode === product.barcode || i.product === name);
-    return {
-      date: d.dates?.start,
-      dayName: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" }) : "?",
-      qty: match?.qty || 0,
-      gross: match?.gross || 0,
-      profit: match?.grossProfit || null,
-    };
+    return { date: d.dates?.start, dayName: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" }) : "?", qty: match?.qty || 0, gross: match?.gross || 0, profit: match?.grossProfit || null };
   });
-  const avgDailyQty = dailyHistory.length > 0 ? (dailyHistory.reduce((s, d) => s + d.qty, 0) / dailyHistory.length).toFixed(1) : "—";
-  const avgWeeklyQty = dailyHistory.length > 0 ? (dailyHistory.reduce((s, d) => s + d.qty, 0) / dailyHistory.length * 7).toFixed(0) : "—";
 
-  const statBox = (label, value, color) => (
+  // Last week qty = sum from 8-14 days ago in the data
+  const last7 = dailyHistory.slice(Math.max(0, dailyHistory.length - 14), Math.max(0, dailyHistory.length - 7));
+  const lastWeekQty = last7.length > 0 ? last7.reduce((s, d) => s + d.qty, 0) : null;
+  const avgDailyQty = dailyHistory.length > 0 ? (dailyHistory.reduce((s, d) => s + d.qty, 0) / dailyHistory.length).toFixed(1) : "—";
+  const qtyChange = lastWeekQty != null && lastWeekQty > 0 ? Math.round(((qty - lastWeekQty) / lastWeekQty) * 100) : null;
+
+  const statBox = (label, value, color, sub) => (
     <div style={{ flex: 1, minWidth: 80, background: C.card, borderRadius: 10, padding: "12px 10px", border: `1px solid ${C.border}`, textAlign: "center" }}>
       <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 700, color: color || C.white }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 
   return (
     <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, display: "flex", flexDirection: "column", background: C.bg }}>
-      {/* Header */}
       <div style={{ padding: "16px 20px 14px", flexShrink: 0, borderBottom: `1px solid ${C.divider}`, background: C.surface }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ flex: 1, marginRight: 12 }}>
@@ -151,43 +148,51 @@ export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
         </div>
       </div>
 
-      {/* Scrollable content */}
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 40px" }}>
-        {/* Key stats grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
           {statBox("Qty Sold", qty)}
+          {statBox("Last Week", lastWeekQty != null ? lastWeekQty : "—", lastWeekQty != null ? C.textSecondary : C.textMuted)}
           {statBox("Revenue", fi(revenue))}
-          {statBox("Profit", profit != null ? f(profit) : "—", profit > 0 ? C.greenText : profit < 0 ? C.redText : C.textMuted)}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-          {statBox("Margin", margin != null ? pct(margin) : "—", margin >= 25 ? C.greenText : margin > 0 && margin < 10 ? C.redText : C.white)}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+          {statBox("Profit", profit != null ? f(profit) : "—", profit > 0 ? C.greenText : profit < 0 ? C.redText : C.textMuted)}
+          {statBox("Margin", margin != null ? pct(margin) : "—", margin >= 25 ? C.greenText : margin > 0 && margin < 15 ? C.redText : C.white)}
           {statBox("Avg/Day", avgDailyQty)}
-          {statBox("Est/Week", avgWeeklyQty)}
         </div>
 
-        {/* Cost data status */}
+        {qtyChange != null && (
+          <div style={{ padding: "10px 14px", borderRadius: 10, background: qtyChange >= 0 ? C.greenDim : C.redDim, border: `1px solid ${qtyChange >= 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>{qtyChange >= 0 ? "📈" : "📉"}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: qtyChange >= 0 ? C.greenText : C.redText }}>
+              {qtyChange >= 0 ? "+" : ""}{qtyChange}% vs last week ({lastWeekQty} → {qty})
+            </span>
+          </div>
+        )}
+
         <div style={{ padding: "10px 14px", borderRadius: 10, background: product.hasCost === false ? C.redDim : C.greenDim, border: `1px solid ${product.hasCost === false ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)"}`, marginBottom: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: product.hasCost === false ? C.redText : C.greenText }}>
             {product.hasCost === false ? "⚠️ No cost data — profit not tracked" : "✓ Cost data available"}
           </div>
-          {product.hasCost === false && (
-            <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 4 }}>Enter the cost price in ShopMate to start tracking profit on this item.</div>
-          )}
         </div>
 
-        {/* Daily breakdown */}
         {dailyHistory.length > 1 && (
-          <>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Daily Breakdown</div>
-            {dailyHistory.map((d, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.divider}` }}>
-                <span style={{ fontSize: 12, color: C.white }}>{d.dayName} {d.date}</span>
-                <span style={{ fontSize: 12, color: C.textMuted }}>×{d.qty}</span>
-                <span style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{f(d.gross)}</span>
-                <span style={{ fontSize: 12, color: d.profit > 0 ? C.greenText : C.textMuted }}>{d.profit != null ? f(d.profit) : "—"}</span>
+          <div style={{ marginBottom: 16 }}>
+            <div onClick={() => setShowDaily(!showDaily)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: showDaily ? "10px 10px 0 0" : 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Daily Breakdown ({dailyHistory.length} days)</span>
+              <span style={{ fontSize: 12, color: C.textMuted, transform: showDaily ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
+            </div>
+            {showDaily && (
+              <div style={{ padding: "8px 14px 12px", background: C.surface, borderRadius: "0 0 10px 10px", border: `1px solid ${C.border}`, borderTop: "none" }}>
+                {dailyHistory.map((d, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.divider}` }}>
+                    <span style={{ fontSize: 12, color: C.white, minWidth: 80 }}>{d.dayName} {d.date}</span>
+                    <span style={{ fontSize: 12, color: C.textMuted }}>×{d.qty}</span>
+                    <span style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{f(d.gross)}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </>
+            )}
+          </div>
         )}
       </div>
     </div>
