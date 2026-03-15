@@ -216,11 +216,6 @@ export default function App() {
     (async () => {
       const ownerId = getOwnerIdFromURL();
       if (!ownerId) { setLoading(false); return; }
-      // Ensure URL is in path format for bookmarking
-      const currentPath = window.location.pathname.replace(/^\//, "").replace(/\/$/, "");
-      if (currentPath !== ownerId) {
-        window.history.replaceState(null, "", "/" + ownerId);
-      }
       try {
         const client = await getOrCreateClient(ownerId);
         if (!client) { setSbStatus("Client error"); setLoading(false); return; }
