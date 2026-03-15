@@ -15,9 +15,17 @@
       body { background: #0B1120; }
     </style>
     <script>
-      // Path-based routing: /londis-horden reads the owner from the path
-      // No query params needed — iOS bookmarks preserve the path
-      // Fallback: ?owner= still works for backwards compatibility
+      // CRITICAL: Convert ?owner= to path format with a REAL redirect
+      // This must happen before React loads so iOS registers the correct URL
+      (function() {
+        var params = new URLSearchParams(window.location.search);
+        var owner = params.get('owner');
+        if (owner) {
+          // Hard redirect: ?owner=londis-horden → /londis-horden
+          window.location.replace('/' + owner);
+          return; // Stop execution — page will reload at new URL
+        }
+      })();
     </script>
   </head>
   <body>
