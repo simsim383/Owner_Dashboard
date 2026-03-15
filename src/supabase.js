@@ -21,14 +21,28 @@ async function sbDelete(t, p) {
   return r.json();
 }
 
-export function getOwnerIdFromURL() {
-  // 1. Check query param (backwards compatible): ?owner=londis-horden
-  const qp = new URLSearchParams(window.location.search).get("owner");
-  if (qp) return qp;
-  // 2. Check path: /londis-horden
-  const path = window.location.pathname.replace(/^\//, "").replace(/\/$/, "");
-  if (path && path !== "" && !path.includes("/") && !path.includes(".")) return path;
-  return null;
+// Get owner ID — localStorage is the source of truth, URL is fallback for first visit only
+export function getSavedOwnerId() {
+  return localStorage.getItem("shopmate_owner_id") || null;
+}
+
+export function saveOwnerId(id) {
+  localStorage.setItem("shopmate_owner_id", id);
+}
+
+export function getSavedPin() {
+  const ownerId = getSavedOwnerId();
+  return ownerId ? localStorage.getItem(`shopmate_pin_${ownerId}`) : null;
+}
+
+export function savePin(ownerId, pin) {
+  localStorage.setItem(`shopmate_pin_${ownerId}`, pin);
+}
+
+export function logout() {
+  const ownerId = getSavedOwnerId();
+  if (ownerId) localStorage.removeItem(`shopmate_pin_${ownerId}`);
+  localStorage.removeItem("shopmate_owner_id");
 }
 
 export async function verifyPin(clientId, pin) {
