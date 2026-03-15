@@ -107,7 +107,7 @@ export const InsightBox = ({ title, icon, children, color }) => (
 );
 
 // ─── PRODUCT DETAIL OVERLAY ─────────────────────────────────────
-export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
+export const ProductDetail = ({ product, onClose, allDays, currentDays, timeRange }) => {
   const [showDaily, setShowDaily] = useState(false);
   if (!product) return null;
   const name = product.product;
@@ -117,18 +117,61 @@ export const ProductDetail = ({ product, onClose, allDays, timeRange }) => {
   const profit = product.totalProfit ?? product.grossProfit ?? null;
   const margin = product.avgMargin ?? product.grossMargin ?? null;
 
+  // Daily history from ALL data for the daily breakdown
   const dailyHistory = (allDays || []).map(d => {
     const match = d.items.find(i => i.barcode === product.barcode || i.product === name);
     return { date: d.dates?.start, dayName: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" }) : "?", qty: match?.qty || 0, gross: match?.gross || 0, profit: match?.grossProfit || null };
   });
 
-  // Previous period qty depends on the view mode
+  // Previous period logic
+  const isDay = timeRange === "Today";
   const isMonth = timeRange === "This Month";
-  const prevLabel = isMonth ? "Last Month" : "Last Week";
-  const prevSliceStart = isMonth ? Math.max(0, dailyHistory.length - 60) : Math.max(0, dailyHistory.length - 14);
-  const prevSliceEnd = isMonth ? Math.max(0, dailyHistory.length - 30) : Math.max(0, dailyHistory.length - 7);
-  const prevDays = dailyHistory.slice(prevSliceStart, prevSliceEnd);
-  const prevQty = prevDays.length > 0 ? prevDays.reduce((s, d) => s + d.qty, 0) : null;
+  let prevLabel, prevQty;
+
+  if (isDay) {
+    // Day mode: yesterday's qty for this product
+    prevLabel = "Yesterday";
+    if (allDays && allDays.length >= 2) {
+      const prevDay = allDays[allDays.length - 2];
+      const match = prevDay?.items?.find(i => i.barcode === product.barcode || i.product === name);
+      prevQty = match ? match.qty : 0;
+    } else { prevQty = null; }
+  } else if (isMonth) {
+    // Month mode: previous calendar month total
+    prevLabel = "Last Month";
+    // Determine what month we're viewing from currentDays
+    const viewDays = currentDays || [];
+    const viewMonth = viewDays.length > 0 ? viewDays[0].dates?.start?.slice(0, 7) : null;
+    if (viewMonth) {
+      const [y, m] = viewMonth.split("-").map(Number);
+      const pm = m === 1 ? 12 : m - 1;
+      const py = m === 1 ? y - 1 : y;
+      const prevMonthKey = `${py}-${String(pm).padStart(2, "0")}`;
+      const prevMonthDays = (allDays || []).filter(d => d.dates?.start?.startsWith(prevMonthKey));
+      if (prevMonthDays.length === 0) {
+        prevQty = null; // No data for previous month
+      } else {
+        prevQty = 0;
+        prevMonthDays.forEach(d => {
+          const match = d.items.find(i => i.barcode === product.barcode || i.product === name);
+          if (match) prevQty += match.qty;
+        });
+      }
+    } else { prevQty = null; }
+  } else {
+    // Week mode: sum of the 7 days before the current view period
+    prevLabel = "Last Week";
+    const viewDates = new Set((currentDays || []).map(d => d.dates?.start));
+    const prevWeekDays = (allDays || []).filter(d => !viewDates.has(d.dates?.start)).slice(-7);
+    if (prevWeekDays.length > 0) {
+      prevQty = 0;
+      prevWeekDays.forEach(d => {
+        const match = d.items.find(i => i.barcode === product.barcode || i.product === name);
+        if (match) prevQty += match.qty;
+      });
+    } else { prevQty = null; }
+  }
+
   const avgDailyQty = dailyHistory.length > 0 ? (dailyHistory.reduce((s, d) => s + d.qty, 0) / dailyHistory.length).toFixed(1) : "—";
   const qtyChange = prevQty != null && prevQty > 0 ? Math.round(((qty - prevQty) / prevQty) * 100) : null;
   const weeklyQty = dailyHistory.length >= 7 ? dailyHistory.slice(-7).reduce((s, d) => s + d.qty, 0) : null;
