@@ -1,32 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <meta name="theme-color" content="#0B1120" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="ShopMate Sales" />
-    <link rel="manifest" href="/manifest.json" />
-    <title>ShopMate Sales</title>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { background: #0B1120; }
-    </style>
-    <script>
-      // CRITICAL: Convert ?owner= to path format with a REAL redirect
-      // This must happen before React loads so iOS registers the correct URL
-      (function() {
-        var params = new URLSearchParams(window.location.search);
-        var owner = params.get('owner');
-        if (owner) {
-          // Hard redirect: ?owner=londis-horden → /londis-horden
-          window.location.replace('/' + owner);
-          return; // Stop execution — page will reload at new URL
-        }
-      })();
-    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Owner Dashboard</title>
   </head>
   <body>
     <div id="root"></div>
