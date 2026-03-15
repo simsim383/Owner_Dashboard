@@ -127,12 +127,42 @@ export function ComingUpSection() {
     (async () => {
       setLoading(true);
       try {
+        // Calculate key dates to feed to the AI so it doesn't hallucinate
+        const now = new Date();
+        const todayStr = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+        const year = now.getFullYear();
+        
+        // Find last Friday of current month (payday)
+        const lastDay = new Date(year, now.getMonth() + 1, 0);
+        while (lastDay.getDay() !== 5) lastDay.setDate(lastDay.getDate() - 1);
+        const paydayStr = lastDay.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+        const paydayDays = Math.max(0, Math.round((lastDay - now) / 86400000));
+
+        const prompt = `Today is ${todayStr}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden). 
+
+KEY DATES TO INCLUDE (calculate days from today yourself):
+- Payday Friday: ${paydayStr} (${paydayDays} days away)
+- Mother's Day UK 2026: 22 March 2026
+- Good Friday 2026: 3 April 2026
+- Easter Sunday 2026: 5 April 2026
+- Easter Monday 2026: 6 April 2026
+- Ramadan 2026: starts approximately 27 February 2026
+- Eid al-Fitr 2026: approximately 29 March 2026
+- May Bank Holiday 2026: 4 May 2026
+- Spring Bank Holiday 2026: 25 May 2026
+
+RULES:
+1. URGENT = 0-3 days away. PLAN = 4-14 days. AWARE = 15+ days.
+2. Calculate "days" as actual days from today ${todayStr}.
+3. Give specific stock advice in the "impact" field.
+4. Only include events that are within the next 6 weeks.
+
+Respond with ONLY a JSON array: [{event, date, days, impact, priority}]
+"days" should be like "3 days" or "2 weeks"`;
+
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST", headers: AI_HDR,
-          body: JSON.stringify({
-            model: AI_MODEL, max_tokens: 800,
-            messages: [{ role: "user", content: `Today is ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden area). RULES: 1) URGENT = within 3 days, PLAN = 4-14 days, AWARE = 15+ days. 2) Include Mother's Day UK, Easter, Ramadan/Eid, payday (last Fri of month), school holidays, sporting events. 3) Give specific stock advice per event. Respond with ONLY a JSON array, no other text: [{event,date,days,impact,priority}]` }],
-          }),
+          body: JSON.stringify({ model: AI_MODEL, max_tokens: 800, messages: [{ role: "user", content: prompt }] }),
         });
         if (!res.ok) { console.error("Coming Up API:", res.status); if (!c) setEvents([]); setLoading(false); return; }
         const data = await res.json();
@@ -140,7 +170,7 @@ export function ComingUpSection() {
         const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
         const clean = text.replace(/```json|```/g, "").trim();
         try { if (!c) setEvents(JSON.parse(clean)); }
-        catch { console.error("Coming Up parse fail:", clean.slice(0, 200)); if (!c) setEvents([]); }
+        catch { console.error("Coming Up parse fail:", clean.slice(0, 300)); if (!c) setEvents([]); }
       } catch (e) { console.error("Coming Up:", e); if (!c) setEvents([]); }
       if (!c) setLoading(false);
     })();
