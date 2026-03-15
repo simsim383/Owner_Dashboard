@@ -2,7 +2,7 @@
 // APP — Main shell: header, nav, routing
 // ═══════════════════════════════════════════════════════════════════
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { C, Stat, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
+import { C, Stat, SectionCard, EmptyState, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
 import { getSavedOwnerId, saveOwnerId, logout, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
 import { analyzeData, getPrevWeekData } from "./analysis.js";
 import Dashboard from "./Dashboard.jsx";
