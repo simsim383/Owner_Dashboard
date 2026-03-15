@@ -14,19 +14,8 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { background: #0B1120; }
     </style>
-    <script>
-      // CRITICAL: Convert ?owner= to path format with a REAL redirect
-      // This must happen before React loads so iOS registers the correct URL
-      (function() {
-        var params = new URLSearchParams(window.location.search);
-        var owner = params.get('owner');
-        if (owner) {
-          // Hard redirect: ?owner=londis-horden → /londis-horden
-          window.location.replace('/' + owner);
-          return; // Stop execution — page will reload at new URL
-        }
-      })();
-    </script>
+    <!-- No URL manipulation needed — identity stored in localStorage -->
+
   </head>
   <body>
     <div id="root"></div>
