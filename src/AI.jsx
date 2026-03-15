@@ -130,14 +130,18 @@ export function ComingUpSection() {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST", headers: AI_HDR,
           body: JSON.stringify({
-            model: AI_MODEL, max_tokens: 500,
-            messages: [{ role: "user", content: `Today is ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden). RULES: Only URGENT if within 3 days. PLAN if 4-14 days. AWARE if 15+ days. ALWAYS include: Mother's Day UK, Easter, Ramadan/Eid, payday (last Fri of month), school holidays, any major sporting events. Give specific stock advice for each. JSON array: {event,date,days,impact,priority}. No markdown.` }],
+            model: AI_MODEL, max_tokens: 800,
+            messages: [{ role: "user", content: `Today is ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden area). RULES: 1) URGENT = within 3 days, PLAN = 4-14 days, AWARE = 15+ days. 2) Include Mother's Day UK, Easter, Ramadan/Eid, payday (last Fri of month), school holidays, sporting events. 3) Give specific stock advice per event. Respond with ONLY a JSON array, no other text: [{event,date,days,impact,priority}]` }],
           }),
         });
+        if (!res.ok) { console.error("Coming Up API:", res.status); if (!c) setEvents([]); setLoading(false); return; }
         const data = await res.json();
+        if (data.error) { console.error("Coming Up error:", data.error); if (!c) setEvents([]); setLoading(false); return; }
         const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-        if (!c) setEvents(JSON.parse(text.replace(/```json|```/g, "").trim()));
-      } catch { if (!c) setEvents([]); }
+        const clean = text.replace(/```json|```/g, "").trim();
+        try { if (!c) setEvents(JSON.parse(clean)); }
+        catch { console.error("Coming Up parse fail:", clean.slice(0, 200)); if (!c) setEvents([]); }
+      } catch (e) { console.error("Coming Up:", e); if (!c) setEvents([]); }
       if (!c) setLoading(false);
     })();
     return () => { c = true; };
@@ -176,16 +180,19 @@ export function NewsSection() {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST", headers: AI_HDR,
           body: JSON.stringify({
-            model: AI_MODEL, max_tokens: 800,
+            model: AI_MODEL, max_tokens: 1000,
             messages: [{ role: "user", content: "Search for 5 recent UK convenience store and grocery retail news stories from this week. Include stories about: supplier price changes, Booker/Nisa/Londis/Premier promotions, wholesale deals, tobacco/vape regulation, and grocery trends. For each: title, source (publication name), summary (1 sentence), url (real URL), timeAgo. ONLY respond with a JSON array. No markdown, no backticks, no explanation." }],
             tools: [{ type: "web_search_20250305", name: "web_search" }],
           }),
         });
+        if (!res.ok) { console.error("News API:", res.status); if (!c) setNews([]); setLoading(false); return; }
         const data = await res.json();
+        if (data.error) { console.error("News error:", data.error); if (!c) setNews([]); setLoading(false); return; }
         const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
         const clean = text.replace(/```json|```/g, "").trim();
-        if (!c && clean) setNews(JSON.parse(clean).slice(0, 5));
-      } catch { if (!c) setNews([]); }
+        try { if (!c && clean) setNews(JSON.parse(clean).slice(0, 5)); else if (!c) setNews([]); }
+        catch { console.error("News parse fail:", clean.slice(0, 200)); if (!c) setNews([]); }
+      } catch (e) { console.error("News:", e); if (!c) setNews([]); }
       if (!c) setLoading(false);
     })();
     return () => { c = true; };
