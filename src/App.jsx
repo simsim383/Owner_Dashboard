@@ -227,21 +227,6 @@ export default function App() {
     setAllDays([]); setActiveSection("dashboard"); setActiveTab("home");
   };
 
-  // Not authenticated — show login/setup screen
-  if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
-
-  // Loading data after auth
-  if (loading) return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 28, marginBottom: 12 }}>📊</div>
-        <div style={{ fontSize: 15, color: C.white, fontWeight: 600 }}>Loading...</div>
-        <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Connecting to your business</div>
-      </div>
-      <style>{globalCSS}</style>
-    </div>
-  );
-
   const addDay = useCallback(async (data, uploadType, transactions) => {
     if (clientId) {
       setSbStatus("Saving...");
@@ -280,7 +265,10 @@ export default function App() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
-  // Loading screen
+  // Not authenticated — show login/setup screen
+  if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+
+  // Loading data after auth
   if (loading) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center" }}>
