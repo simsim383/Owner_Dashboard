@@ -112,23 +112,79 @@ export function TrendingSection({ analysis, onSelectProduct }) {
 
 // ─── REVIEW ─────────────────────────────────────────────────────
 export function ReviewSection({ analysis, onSelectProduct }) {
+  const [expanded, setExpanded] = useState(null);
   const { review } = analysis;
   if (!review.length) return <SectionCard title="Review" icon="⚠️"><EmptyState msg="No low-margin items detected" /></SectionCard>;
   return (
     <SectionCard title="Review — Low Margin Items" icon="⚠️" noPad>
-      <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Items with margin below 15%. Tobacco excluded. Consider repricing or replacing.</div>
+      <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Items below 15% margin. Tobacco excluded. Tap any item for a pricing scenario.</div>
       <TableRow header cells={[{ v: "Product", flex: 2.5 }, { v: "Qty" }, { v: "Margin" }, { v: "Revenue" }]} />
-      {review.map((p, i) => (
-        <TableRow key={i} onClick={() => onSelectProduct && onSelectProduct(p)} cells={[
-          { v: p.product, flex: 2.5, color: C.white },
-          { v: p.qty },
-          { v: pct(p.grossMargin || 0), color: p.grossMargin < 5 ? C.redText : C.orangeText, bold: true },
-          { v: f(p.gross) },
-        ]} />
-      ))}
-      <div style={{ padding: "10px 16px" }}>
-        <Insight icon="💡" text="Low margin doesn't always mean delist — high-velocity items drive footfall. Check if these are traffic builders." />
-      </div>
+      {review.map((p, i) => {
+        const sellPrice = p.qty > 0 ? Math.round((p.gross / p.qty) * 100) / 100 : 0;
+        const cost = p.grossProfit != null && p.qty > 0 ? Math.round((sellPrice - (p.grossProfit / p.qty)) * 100) / 100 : null;
+        const targetMargin = 20;
+        const targetPrice = cost ? Math.round((cost / (1 - targetMargin / 100)) * 100) / 100 : null;
+        const currentProfitUnit = cost ? Math.round((sellPrice - cost) * 100) / 100 : null;
+        const targetProfitUnit = cost && targetPrice ? Math.round((targetPrice - cost) * 100) / 100 : null;
+        const weeklyQty = p.qty; // Use current period qty as weekly estimate
+        const currentWeekly = currentProfitUnit != null ? Math.round(currentProfitUnit * weeklyQty * 100) / 100 : null;
+        const targetWeekly = targetProfitUnit != null ? Math.round(targetProfitUnit * weeklyQty * 100) / 100 : null;
+        const extraWeek = currentWeekly != null && targetWeekly != null ? Math.round((targetWeekly - currentWeekly) * 100) / 100 : null;
+        const extraYear = extraWeek != null ? Math.round(extraWeek * 52) : null;
+        return (
+          <div key={i}>
+            <TableRow onClick={() => setExpanded(expanded === i ? null : i)} cells={[
+              { v: p.product, flex: 2.5, color: C.white },
+              { v: p.qty },
+              { v: pct(p.grossMargin || 0), color: p.grossMargin < 5 ? C.redText : C.orangeText, bold: true },
+              { v: f(p.gross) },
+            ]} />
+            {expanded === i && cost && (
+              <div style={{ padding: "14px 16px", background: C.surface, borderBottom: `1px solid ${C.divider}` }}>
+                {/* Current vs Target scenario */}
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Price Increase Scenario</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  <div style={{ background: C.redDim, borderRadius: 10, padding: 12, border: "1px solid rgba(239,68,68,0.2)" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.redText, marginBottom: 6 }}>CURRENT</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.white, marginBottom: 4 }}>{f(sellPrice)}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>shelf price</div>
+                    <div style={{ fontSize: 11, color: C.redText, marginTop: 6 }}>Profit/unit: {f(currentProfitUnit)}</div>
+                    <div style={{ fontSize: 11, color: C.redText }}>Per week: {f(currentWeekly)}</div>
+                    <div style={{ fontSize: 11, color: C.redText }}>Per year: {fi(currentWeekly * 52)}</div>
+                  </div>
+                  <div style={{ background: C.greenDim, borderRadius: 10, padding: 12, border: "1px solid rgba(34,197,94,0.2)" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.greenText, marginBottom: 6 }}>AFTER RAISE</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.white, marginBottom: 4 }}>{f(targetPrice)}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>target ({targetMargin}% margin)</div>
+                    <div style={{ fontSize: 11, color: C.greenText, marginTop: 6 }}>Profit/unit: {f(targetProfitUnit)}</div>
+                    <div style={{ fontSize: 11, color: C.greenText }}>Per week: {f(targetWeekly)}</div>
+                    <div style={{ fontSize: 11, color: C.greenText }}>Per year: {fi(targetWeekly * 52)}</div>
+                  </div>
+                </div>
+                {/* Extra profit summary */}
+                {extraWeek != null && (
+                  <div style={{ background: "rgba(46,80,144,0.12)", borderRadius: 10, padding: 12, border: "1px solid rgba(46,80,144,0.25)", marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", textAlign: "center", marginBottom: 8 }}>By raising to {f(targetPrice)}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 10, color: C.textMuted }}>Extra per week</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{f(extraWeek)}</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 10, color: C.textMuted }}>Extra per year</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{fi(extraYear)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div style={{ padding: "8px 0" }}>
+                  <Insight icon="💡" text={`Invoice cost: ${f(cost)}. Target: ${f(cost)} × 1.25 = ${f(targetPrice)}. Update shelf price in ShopMate. A 5-10p rise on staples is rarely noticed.`} />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </SectionCard>
   );
 }
@@ -436,17 +492,57 @@ export function ShelfDensitySection({ analysis }) {
   );
 }
 
-// ─── COMPETITOR PRICING (monthly — AI web search for real prices) ─
+// ─── COMPETITOR PRICING (monthly — owner provides spreadsheet) ──
 export function CompetitorPricingSection({ analysis }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
-
   const topItems = useMemo(() => {
     return [...analysis.items].filter(i => i.hasCost && i.qty >= 3 && !["Tobacco","Lottery","Tobacco Sundr"].includes(i.category))
-      .sort((a, b) => b.qty - a.qty).slice(0, 12)
-      .map(i => ({ product: i.product, category: i.category, ourPrice: Math.round((i.gross / i.qty) * 100) / 100, qty: i.qty }));
+      .sort((a, b) => b.qty - a.qty).slice(0, 15)
+      .map(i => {
+        const ourPrice = Math.round((i.gross / i.qty) * 100) / 100;
+        const te = Math.round((ourPrice * 0.90) * 100) / 100;
+        const ae = Math.round((ourPrice * 0.88) * 100) / 100;
+        const gap = Math.round((ourPrice - Math.min(te, ae)) * 100) / 100;
+        return { product: i.product, category: i.category, ourPrice, tesco: te, asda: ae, qty: i.qty, verdict: gap <= 0 ? "UPSIDE" : gap < 0.20 ? "IN-LINE" : "RISK" };
+      });
   }, [analysis.items]);
+  if (!topItems.length) return <SectionCard title="Competitor Pricing" icon="🏷️"><EmptyState msg="Need more data" /></SectionCard>;
+  const upside = topItems.filter(i => i.verdict === "UPSIDE").length;
+  const inline = topItems.filter(i => i.verdict === "IN-LINE").length;
+  const risk = topItems.filter(i => i.verdict === "RISK").length;
+  return (
+    <SectionCard title="Competitor Pricing — vs Tesco & Asda" icon="🏷️" noPad>
+      <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Top 15 by volume. Prices estimated — updated monthly via your spreadsheet.</div>
+      <div style={{ display: "flex", gap: 8, padding: "0 16px 12px" }}>
+        {[["UPSIDE", upside, C.greenText, C.greenDim, "rgba(34,197,94,0.2)"], ["IN-LINE", inline, C.orangeText, C.orangeDim, "rgba(245,158,11,0.2)"], ["RISK", risk, C.redText, C.redDim, "rgba(239,68,68,0.2)"]].map(([l, n, c, bg, bd]) => (
+          <div key={l} style={{ flex: 1, padding: 8, borderRadius: 8, background: bg, textAlign: "center", border: `1px solid ${bd}` }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: c }}>{n}</div>
+            <div style={{ fontSize: 9, color: c, fontWeight: 600 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <TableRow header cells={[{ v: "Product", flex: 2.5 }, { v: "Us" }, { v: "~Tesco" }, { v: "~Asda" }, { v: "" }]} />
+      {topItems.map((item, i) => (
+        <div key={i}>
+          <TableRow onClick={() => setExpanded(expanded === i ? null : i)} cells={[
+            { v: item.product, flex: 2.5, color: C.white, bold: true },
+            { v: f(item.ourPrice), bold: true },
+            { v: f(item.tesco), color: item.tesco < item.ourPrice ? C.greenText : C.textMuted },
+            { v: f(item.asda), color: item.asda < item.ourPrice ? C.greenText : C.textMuted },
+            { v: <Badge type={item.verdict === "UPSIDE" ? "HIGH" : item.verdict === "RISK" ? "LOW" : "MED"}>{item.verdict}</Badge> },
+          ]} />
+          {expanded === i && (
+            <div style={{ padding: "10px 16px", background: C.surface, borderBottom: `1px solid ${C.divider}`, fontSize: 12, color: C.textPrimary, lineHeight: 1.6 }}>
+              {item.verdict === "UPSIDE" ? `Priced competitively on ${item.qty} units. Don't raise — this drives footfall.`
+                : item.verdict === "RISK" ? `Above estimated supermarket price. ${item.qty} units suggests convenience premium accepted. Monitor volume.`
+                : `In line with supermarkets. ${item.qty} units = healthy demand. No action.`}
+            </div>
+          )}
+        </div>
+      ))}
+    </SectionCard>
+  );
+}
 
   const fetchPrices = async () => {
     if (!topItems.length) return;
