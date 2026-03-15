@@ -370,7 +370,22 @@ export default function App() {
 
   // Previous period for WoW comparison
   const prevWeekDays = useMemo(() => {
-    if (timeRange === "day" || !allDays.length) return null;
+    if (!allDays.length) return null;
+    if (timeRange === "day") {
+      // Day mode: return previous day as a single-element array
+      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
+    }
+    if (timeRange === "month") {
+      // Month mode: find the PREVIOUS calendar month's data
+      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
+      if (!currentMonthKey) return null;
+      const d = new Date(currentMonthKey + "-15");
+      d.setMonth(d.getMonth() - 1);
+      const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
+      return prevDays.length > 0 ? prevDays : null;
+    }
+    // Week mode: get the same number of days before
     return getPrevWeekData(allDays, currentDays);
   }, [allDays, currentDays, timeRange]);
 
@@ -535,6 +550,7 @@ export default function App() {
           product={selectedProduct}
           onClose={() => setSelectedProduct(null)}
           allDays={allDays}
+          currentDays={currentDays}
           timeRange={rangeLabel}
         />
       )}
