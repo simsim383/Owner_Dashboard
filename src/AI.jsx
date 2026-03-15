@@ -36,9 +36,14 @@ TOP 30:\n${top}
 RULES:
 • Use bullet points, bold key numbers
 • Keep under 150 words
-• Lead with the direct answer
-• Reference actual data
-• End with one clear action`;
+• Lead with the direct answer, then supporting data
+• Reference actual product names and numbers from the data
+• End with one clear action
+• NEVER suggest price increases on price-marked items (any product with "Pm" in its name — e.g. Pm279, Pm219 — has a fixed price printed on the pack)
+• NEVER suggest price increases on tobacco or cigarettes
+• NEVER suggest milk as a price increase candidate unless specifically asked
+• When asked about pricing, only suggest NON-price-marked, non-tobacco items
+• If asked what to raise prices on, filter to items where the owner controls pricing`;
   }, [analysis, allDays]);
 
   const send = useCallback(async () => {
@@ -130,35 +135,36 @@ export function ComingUpSection() {
         // Calculate key dates to feed to the AI so it doesn't hallucinate
         const now = new Date();
         const todayStr = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        const year = now.getFullYear();
         
         // Find last Friday of current month (payday)
-        const lastDay = new Date(year, now.getMonth() + 1, 0);
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         while (lastDay.getDay() !== 5) lastDay.setDate(lastDay.getDate() - 1);
         const paydayStr = lastDay.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
         const paydayDays = Math.max(0, Math.round((lastDay - now) / 86400000));
 
         const prompt = `Today is ${todayStr}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden). 
 
-KEY DATES TO INCLUDE (calculate days from today yourself):
+VERIFIED 2026 UK DATES (use these exactly):
+- Mother's Day UK: Sunday 15 March 2026 (Mothering Sunday)
+- St Patrick's Day: Tuesday 17 March 2026
 - Payday Friday: ${paydayStr} (${paydayDays} days away)
-- Mother's Day UK 2026: 22 March 2026
-- Good Friday 2026: 3 April 2026
-- Easter Sunday 2026: 5 April 2026
-- Easter Monday 2026: 6 April 2026
-- Ramadan 2026: starts approximately 27 February 2026
-- Eid al-Fitr 2026: approximately 29 March 2026
-- May Bank Holiday 2026: 4 May 2026
-- Spring Bank Holiday 2026: 25 May 2026
+- Good Friday: Friday 3 April 2026
+- Easter Sunday: Sunday 5 April 2026
+- Easter Monday: Monday 6 April 2026
+- School Easter holidays: approx 30 March - 10 April 2026
+- Early May Bank Holiday: Monday 4 May 2026
+- Spring Bank Holiday: Monday 25 May 2026
+- Ramadan 2026: started approx 28 February, ends approx 29 March
+- Eid al-Fitr 2026: approx Sunday 29 March 2026
 
 RULES:
 1. URGENT = 0-3 days away. PLAN = 4-14 days. AWARE = 15+ days.
-2. Calculate "days" as actual days from today ${todayStr}.
+2. Calculate "days" from today ${todayStr}. If an event is TODAY, say "TODAY".
 3. Give specific stock advice in the "impact" field.
-4. Only include events that are within the next 6 weeks.
+4. Only include events within the next 6 weeks from today.
+5. If an event has passed (before today), do NOT include it.
 
-Respond with ONLY a JSON array: [{event, date, days, impact, priority}]
-"days" should be like "3 days" or "2 weeks"`;
+Respond with ONLY a JSON array: [{event, date, days, impact, priority}]`;
 
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST", headers: AI_HDR,
