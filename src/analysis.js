@@ -62,7 +62,12 @@ export function analyzeData(allDays,currentRange,timeRange,prevWeekDays){
   const catTopBottom={};
   categories.forEach(cat=>{const wc=cat.products.filter(p=>p.hasCost);const byQty=[...wc].sort((a,b)=>b.qty-a.qty);catTopBottom[cat.name]={top:byQty.slice(0,5),bottom:isMultiDay?[...wc].sort((a,b)=>a.qty-b.qty).slice(0,5):[]};});
 
-  const prevItems=allDays.length>1?allDays[allDays.length-2]?.items||[]:[];
+  // Previous period items for trending comparison
+  // prevWeekDays is now set for ALL modes: day=yesterday, week=prev 7 days, month=prev month
+  let prevItems=[];
+  if(prevWeekDays&&prevWeekDays.length>0){
+    prevItems=aggregateByBarcode(prevWeekDays.flatMap(d=>d.items));
+  }
   const prevMap={};prevItems.forEach(i=>{prevMap[i.barcode]=i;});
   const trending=items.filter(i=>{const prev=prevMap[i.barcode];return i.qty>=3&&prev&&prev.qty>0&&((i.qty-prev.qty)/prev.qty)>=0.4&&i.hasCost&&(i.grossProfit||0)>0.5;}).map(i=>{const prev=prevMap[i.barcode];return{...i,prevQty:prev.qty,trendPct:Math.round(((i.qty-prev.qty)/prev.qty)*100)};}).sort((a,b)=>b.trendPct-a.trendPct).slice(0,15);
 
