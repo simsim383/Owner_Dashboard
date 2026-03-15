@@ -8,7 +8,7 @@ import { C, Badge, Stat, SectionCard, TableRow, EmptyState, ChartTip, Insight, I
 // ─── CATEGORIES (with revenue chart + expandable top/bottom) ────
 export function CategoriesSection({ analysis, timeRange, onSelectProduct }) {
   const [expanded, setExpanded] = useState(null);
-  const { categories, catTopBottom } = analysis;
+  const { categories, catTopBottom, catWoW } = analysis;
   const isMultiDay = timeRange !== "Today";
 
   const catData = categories.slice(0, 10).map(c => ({
@@ -35,14 +35,17 @@ export function CategoriesSection({ analysis, timeRange, onSelectProduct }) {
       </div>
 
       {/* Category table */}
-      <TableRow header cells={[{ v: "Category", flex: 2 }, { v: "Revenue" }, { v: "Profit" }, { v: "Margin" }]} />
-      {categories.map((cat, idx) => (
+      <TableRow header cells={[{ v: "Category", flex: 2 }, { v: "Revenue" }, { v: "Profit" }, { v: "Margin" }, ...(isMultiDay && catWoW ? [{ v: "WoW" }] : [])]} />
+      {categories.map((cat, idx) => {
+        const wow = catWoW?.[cat.name];
+        return (
         <div key={cat.name}>
           <TableRow onClick={() => setExpanded(expanded === idx ? null : idx)} cells={[
             { v: cat.name, flex: 2, color: C.white, bold: true },
             { v: fi(cat.gross), bold: true },
             { v: cat.profit > 0 ? fi(cat.profit) : "—", color: cat.profit > 0 ? C.greenText : C.textMuted },
             { v: cat.margin > 0 ? pct(cat.margin) : "—", color: cat.margin >= 25 ? C.greenText : cat.margin < 10 && cat.margin > 0 ? C.redText : C.textPrimary },
+            ...(isMultiDay && catWoW ? [{ v: wow ? `${wow.grossChg > 0 ? "+" : ""}${wow.grossChg}%` : "—", color: wow ? (wow.grossChg > 0 ? C.greenText : wow.grossChg < 0 ? C.redText : C.textMuted) : C.textMuted, bold: true }] : []),
           ]} />
 
           {expanded === idx && catTopBottom[cat.name] && (
@@ -78,7 +81,8 @@ export function CategoriesSection({ analysis, timeRange, onSelectProduct }) {
             </div>
           )}
         </div>
-      ))}
+      );
+      })}
     </SectionCard>
   );
 }
@@ -112,7 +116,7 @@ export function ReviewSection({ analysis, onSelectProduct }) {
   if (!review.length) return <SectionCard title="Review" icon="⚠️"><EmptyState msg="No low-margin items detected" /></SectionCard>;
   return (
     <SectionCard title="Review — Low Margin Items" icon="⚠️" noPad>
-      <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Items with margin below 10%. Consider repricing or replacing.</div>
+      <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Items with margin below 15%. Tobacco excluded. Consider repricing or replacing.</div>
       <TableRow header cells={[{ v: "Product", flex: 2.5 }, { v: "Qty" }, { v: "Margin" }, { v: "Revenue" }]} />
       {review.map((p, i) => (
         <TableRow key={i} onClick={() => onSelectProduct && onSelectProduct(p)} cells={[
@@ -275,38 +279,47 @@ export function OpsSection({ analysis, allDays }) {
 
   // Chart data includes transactions and basket for the tooltip
   const chartData = dailyData.map(d => ({
-    label: d.dayName, revenue: d.gross, transactions: d.transactions || 0, basket: d.avgBasket || 0, items: d.qty,
+    label: d.dayName, date: d.date, revenue: d.gross, transactions: d.transactions || 0, basket: d.avgBasket || 0, items: d.qty,
     fill: d.gross > avgD * 1.15 ? C.green : d.gross < avgD * 0.85 ? C.red : C.accentLight,
   }));
 
-  // Custom tooltip showing all daily stats
-  const OpsTooltip = ({ active, payload, label }) => {
+  // Custom tooltip showing all daily stats including date
+  const OpsTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const d = payload[0]?.payload;
     return (
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, minWidth: 140 }}>
-        <div style={{ color: C.white, fontWeight: 700, marginBottom: 6 }}>{label}</div>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, minWidth: 150 }}>
+        <div style={{ color: C.white, fontWeight: 700, marginBottom: 6 }}>{d.label} — {d.date}</div>
         <div style={{ color: C.accentLight, fontWeight: 700 }}>Revenue: {fi(d.revenue)}</div>
-        <div style={{ color: C.textPrimary, marginTop: 2 }}>Items: {d.items}</div>
-        {d.transactions > 0 && <div style={{ color: C.textPrimary, marginTop: 2 }}>Transactions: {d.transactions}</div>}
-        {d.basket > 0 && <div style={{ color: C.orangeText, fontWeight: 600, marginTop: 2 }}>Avg basket: {f(d.basket)}</div>}
+        <div style={{ color: C.textPrimary, marginTop: 3 }}>Items: {d.items}</div>
+        {d.transactions > 0 && <div style={{ color: C.textPrimary, marginTop: 3 }}>Transactions: {d.transactions}</div>}
+        {d.basket > 0 && <div style={{ color: C.orangeText, fontWeight: 600, marginTop: 3 }}>Avg basket: {f(d.basket)}</div>}
       </div>
     );
   };
 
   return (
     <SectionCard title="Operational Intelligence" icon="⚙️">
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-        <Stat label="Avg Daily" value={fi(avgD)} small />
-        <Stat label="Busiest" value={busiest.dayName} sub={fi(busiest.gross)} small />
-        <Stat label="Quietest" value={quietest.dayName} sub={fi(quietest.gross)} small />
-      </div>
-      {avgBasket && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
-          <Stat label="Avg Basket" value={f(avgBasket)} small />
-          {mostTrans && <Stat label="Most Trans" value={mostTrans.dayName} sub={`${mostTrans.transactions} trans`} small />}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        <div style={{ background: C.surface, borderRadius: 10, padding: "12px 10px", textAlign: "center", border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Avg Daily</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.white }}>{fi(avgD)}</div>
         </div>
-      )}
+        <div style={{ background: C.surface, borderRadius: 10, padding: "12px 10px", textAlign: "center", border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Avg Basket</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.white }}>{avgBasket ? f(avgBasket) : "—"}</div>
+        </div>
+        <div style={{ background: C.greenDim, borderRadius: 10, padding: "12px 10px", textAlign: "center", border: "1px solid rgba(34,197,94,0.2)" }}>
+          <div style={{ fontSize: 10, color: C.greenText, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Busiest</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{busiest.dayName}</div>
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{fi(busiest.gross)}{busiest.transactions ? ` · ${busiest.transactions} trans` : ""}</div>
+        </div>
+        <div style={{ background: C.redDim, borderRadius: 10, padding: "12px 10px", textAlign: "center", border: "1px solid rgba(239,68,68,0.2)" }}>
+          <div style={{ fontSize: 10, color: C.redText, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Quietest</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.redText }}>{quietest.dayName}</div>
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{fi(quietest.gross)}{quietest.transactions ? ` · ${quietest.transactions} trans` : ""}</div>
+        </div>
+      </div>
 
       <div style={{ height: 200, marginBottom: 12 }}>
         <ResponsiveContainer width="100%" height="100%">
