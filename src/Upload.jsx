@@ -180,13 +180,28 @@ export function ManageUploadsSection({ clientId, onRefresh }) {
       )}
 
       {monthList.map((month, mi) => (
-        <div key={mi} style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{month.label}</span>
-            <span style={{ fontSize: 12, color: C.textMuted }}>{month.uploads.length} days · {fi(month.totalGross)}</span>
-          </div>
+        <MonthUploadGroup key={mi} month={month} deleting={deleting} onDelete={handleDelete} />
+      ))}
+    </SectionCard>
+  );
+}
+
+// Expandable month group
+function MonthUploadGroup({ month, deleting, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div onClick={() => setExpanded(!expanded)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: expanded ? "10px 10px 0 0" : 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{month.label}</div>
+          <div style={{ fontSize: 11, color: C.textMuted }}>{month.uploads.length} days · {fi(month.totalGross)}</div>
+        </div>
+        <span style={{ fontSize: 14, color: C.textMuted, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
+      </div>
+      {expanded && (
+        <div style={{ padding: "8px 10px 10px", background: C.surface, borderRadius: "0 0 10px 10px", border: `1px solid ${C.border}`, borderTop: "none" }}>
           {month.uploads.map((u, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", marginBottom: 3, borderRadius: 8, background: C.surface, border: `1px solid ${u.is_estimated ? "rgba(245,158,11,0.15)" : C.border}` }}>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", marginBottom: 2, borderRadius: 6, background: C.card, border: `1px solid ${u.is_estimated ? "rgba(245,158,11,0.15)" : C.border}` }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</span>
@@ -194,16 +209,16 @@ export function ManageUploadsSection({ clientId, onRefresh }) {
                 </div>
                 <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
                   {fi(Number(u.total_gross || 0))} · {u.total_qty || 0} items
-                  {u.transactions && ` · ${u.transactions} trans · ${f(Number(u.avg_basket || 0))} avg`}
+                  {u.transactions && ` · ${u.transactions} trans`}
                 </div>
               </div>
-              <button onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) handleDelete(u); }} disabled={deleting === u.id} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
+              <button onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) onDelete(u); }} disabled={deleting === u.id} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
                 {deleting === u.id ? "..." : "Delete"}
               </button>
             </div>
           ))}
         </div>
-      ))}
-    </SectionCard>
+      )}
+    </div>
   );
 }
