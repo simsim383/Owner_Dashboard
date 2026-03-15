@@ -115,9 +115,43 @@ export function ReviewSection({ analysis, onSelectProduct }) {
   const [expanded, setExpanded] = useState(null);
   const { review } = analysis;
   if (!review.length) return <SectionCard title="Review" icon="⚠️"><EmptyState msg="No low-margin items detected" /></SectionCard>;
+  // Calculate total potential if all raised to 20% margin
+  const totalCurrentWeekly = review.reduce((s, p) => {
+    if (!p.grossProfit || p.qty <= 0) return s;
+    return s + (p.grossProfit / p.qty) * p.qty;
+  }, 0);
+  const totalTargetWeekly = review.reduce((s, p) => {
+    if (p.qty <= 0) return s;
+    const sp = p.gross / p.qty;
+    const c = p.grossProfit != null ? sp - (p.grossProfit / p.qty) : null;
+    if (!c || c <= 0) return s;
+    const tp = c / (1 - 0.20);
+    return s + (tp - c) * p.qty;
+  }, 0);
+  const extraWeeklyAll = Math.round((totalTargetWeekly - totalCurrentWeekly) * 100) / 100;
+  const extraYearlyAll = Math.round(extraWeeklyAll * 52);
+
   return (
     <SectionCard title="Review — Low Margin Items" icon="⚠️" noPad>
       <div style={{ padding: "10px 16px", fontSize: 12, color: C.textSecondary }}>Items below 15% margin. Tobacco excluded. Tap any item for a pricing scenario.</div>
+
+      {/* Summary: total potential if all raised to 20% */}
+      {extraWeeklyAll > 0 && (
+        <div style={{ margin: "0 16px 12px", padding: 14, borderRadius: 12, background: "linear-gradient(135deg, rgba(46,80,144,0.15), rgba(34,197,94,0.08))", border: "1px solid rgba(46,80,144,0.25)" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>If all {review.length} items raised to 20% margin</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: C.textMuted, marginBottom: 4 }}>Extra per week</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.greenText }}>{f(extraWeeklyAll)}</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: C.textMuted, marginBottom: 4 }}>Extra per year</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.greenText }}>{fi(extraYearlyAll)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TableRow header cells={[{ v: "Product", flex: 2.5 }, { v: "Qty" }, { v: "Margin" }, { v: "Revenue" }]} />
       {review.map((p, i) => {
         const sellPrice = p.qty > 0 ? Math.round((p.gross / p.qty) * 100) / 100 : 0;
@@ -142,7 +176,8 @@ export function ReviewSection({ analysis, onSelectProduct }) {
             {expanded === i && cost && (
               <div style={{ padding: "14px 16px", background: C.surface, borderBottom: `1px solid ${C.divider}` }}>
                 {/* Current vs Target scenario */}
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Price Increase Scenario</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>Price Increase Scenario</div>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>Selling ~{p.qty}/period · {f(sellPrice)} per unit · Cost: {f(cost)}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
                   <div style={{ background: C.redDim, borderRadius: 10, padding: 12, border: "1px solid rgba(239,68,68,0.2)" }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.redText, marginBottom: 6 }}>CURRENT</div>
