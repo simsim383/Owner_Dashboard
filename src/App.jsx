@@ -4,12 +4,94 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { C, Stat, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
 import { getSavedOwnerId, saveOwnerId, logout, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
-import { analyzeData } from "./analysis.js";
+import { analyzeData, getPrevWeekData } from "./analysis.js";
 import Dashboard from "./Dashboard.jsx";
 import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
+
+// ─── SETTINGS SECTION ───────────────────────────────────────────
+function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
+  const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmNewPin, setConfirmNewPin] = useState("");
+  const [pinMsg, setPinMsg] = useState(null);
+  const [savingPin, setSavingPin] = useState(false);
+
+  const handleChangePin = async () => {
+    if (currentPin.length !== 4) { setPinMsg("Enter your current 4-digit PIN"); return; }
+    if (newPin.length !== 4) { setPinMsg("New PIN must be 4 digits"); return; }
+    if (newPin !== confirmNewPin) { setPinMsg("New PINs don't match"); return; }
+    setSavingPin(true); setPinMsg(null);
+    const valid = await verifyPin(clientId, currentPin);
+    if (!valid) { setPinMsg("Current PIN is incorrect"); setSavingPin(false); return; }
+    await setPin(clientId, newPin);
+    setPinMsg("✓ PIN updated successfully");
+    setCurrentPin(""); setNewPin(""); setConfirmNewPin("");
+    setSavingPin(false);
+  };
+
+  const pinInp = { width: "100%", padding: "14px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 22, fontWeight: 800, letterSpacing: 8, textAlign: "center", outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
+
+  if (activeSettings === "uploads") return (
+    <div>
+      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
+      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} />
+    </div>
+  );
+
+  if (activeSettings === "pin") return (
+    <SectionCard title="Change PIN" icon="🔑">
+      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CURRENT PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={currentPin} onChange={e => { setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>NEW PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={newPin} onChange={e => { setNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM NEW PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={confirmNewPin} onChange={e => { setConfirmNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      {pinMsg && <div style={{ fontSize: 13, color: pinMsg.startsWith("✓") ? C.greenText : C.redText, marginBottom: 12 }}>{pinMsg}</div>}
+      <button onClick={handleChangePin} disabled={savingPin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>{savingPin ? "Saving..." : "Update PIN"}</button>
+    </SectionCard>
+  );
+
+  return (
+    <SectionCard title="Settings" icon="⚙️">
+      <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16 }}>Logged in as <strong style={{ color: C.white }}>{clientName}</strong></div>
+      {[
+        { label: "Manage Uploads", sub: "View, delete uploaded data", icon: "📋", action: () => setActiveSettings("uploads") },
+        { label: "Change PIN", sub: "Update your 4-digit PIN", icon: "🔑", action: () => setActiveSettings("pin") },
+      ].map((item, i) => (
+        <div key={i} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginBottom: 8, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+          <span style={{ fontSize: 22 }}>{item.icon}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.white }}>{item.label}</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{item.sub}</div>
+          </div>
+          <span style={{ fontSize: 14, color: C.textMuted }}>›</span>
+        </div>
+      ))}
+      <div onClick={() => setConfirmLogout(true)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginTop: 16, borderRadius: 12, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", cursor: "pointer" }}>
+        <span style={{ fontSize: 22 }}>🚪</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.redText }}>Log Out</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Return to login screen</div>
+        </div>
+      </div>
+      {confirmLogout && (
+        <div style={{ marginTop: 16, padding: 16, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 12 }}>Are you sure you want to log out?</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setConfirmLogout(false)} style={{ flex: 1, padding: "12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={onLogout} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: C.red, color: C.white, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Log Out</button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
 
 const baseSections = [
   { id: "dashboard", label: "Dashboard", icon: "📊" },
@@ -29,11 +111,11 @@ const monthlySections = [
 ];
 const alwaysSections = [
   { id: "coming", label: "Coming Up", icon: "📅" },
-  { id: "manage", label: "Uploads", icon: "📋" },
+  { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", coming: "Events & prep", manage: "View & delete uploads", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -249,18 +331,55 @@ export default function App() {
     if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
   }, [clientId]);
 
-  // Current range data
+  const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+
+  // Available months from data
+  const availableMonths = useMemo(() => {
+    const months = {};
+    allDays.forEach(d => {
+      if (!d.dates?.start) return;
+      const m = d.dates.start.slice(0, 7); // "2026-03"
+      if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
+      months[m].days.push(d);
+    });
+    return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
+  }, [allDays]);
+
+  // Previous complete month key
+  const prevMonthKey = useMemo(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  // Current range data — day/week/month logic
+  const currentDays = useMemo(() => {
+    if (!allDays.length) return [];
+    if (timeRange === "day") return [allDays[allDays.length - 1]];
+    if (timeRange === "week") return allDays.slice(-7);
+    // Month: use selected month or previous complete month
+    const mKey = selectedMonth || prevMonthKey;
+    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
+    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
+  }, [allDays, timeRange, selectedMonth, prevMonthKey]);
+
   const currentData = useMemo(() => {
-    if (!allDays.length) return null;
-    if (timeRange === "day") return allDays[allDays.length - 1];
-    return { items: allDays.flatMap(d => d.items), dates: { start: allDays[0].dates?.start, end: allDays[allDays.length - 1].dates?.end } };
-  }, [allDays, timeRange]);
+    if (!currentDays.length) return null;
+    if (timeRange === "day") return currentDays[0];
+    return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
+  }, [currentDays, timeRange]);
+
+  // Previous period for WoW comparison
+  const prevWeekDays = useMemo(() => {
+    if (timeRange === "day" || !allDays.length) return null;
+    return getPrevWeekData(allDays, currentDays);
+  }, [allDays, currentDays, timeRange]);
 
   const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
   const isMultiDay = timeRange !== "day";
-  const sectionList = [...baseSections, ...(isMultiDay ? monthlySections : []), ...alwaysSections];
+  const isMonth = timeRange === "month";
+  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
   const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
-  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel) : null, [currentData, allDays, rangeLabel]);
+  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -297,22 +416,22 @@ export default function App() {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel} />;
+      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
       case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
       case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "topsellers": return <TopSellersSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "erosion": return <ErosionSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "missing": return <HiddenProfitSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "ops": return <OpsSection analysis={analysis} allDays={allDays} />;
+      case "ops": return <OpsSection analysis={analysis} allDays={currentDays} />;
       case "actions": return <ActionsSection analysis={analysis} />;
       case "density": return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
       case "coming": return <ComingUpSection />;
-      case "manage": return <ManageUploadsSection clientId={clientId} onRefresh={refreshData} />;
-      case "ai": return <AIChatSection analysis={analysis} allDays={allDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={allDays} timeRange={rangeLabel} />;
+      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
+      case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
+      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
     }
   };
 
@@ -334,18 +453,26 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
             <div style={{ padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: C.greenDim, color: C.greenText, border: "1px solid rgba(34,197,94,0.2)" }}>● LIVE</div>
             <button onClick={() => setActiveTab("upload")} style={{ padding: "5px 12px", borderRadius: 8, background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Upload</button>
-            <button onClick={handleLogout} style={{ padding: "5px 12px", borderRadius: 8, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Logout</button>
           </div>
         </div>
 
         {/* Time toggle */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
           {timeRanges.map(tr => (
             <button key={tr.id} onClick={() => setTimeRange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
               {tr.label}
             </button>
           ))}
         </div>
+
+        {/* Month selector — only when in month mode */}
+        {isMonth && availableMonths.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
+              {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
+            </select>
+          </div>
+        )}
 
         {/* Mini KPI bar */}
         <div style={{ display: "flex", gap: 8, padding: "14px 16px", borderRadius: 12, background: `linear-gradient(135deg, ${C.card}, rgba(46,80,144,0.1))`, border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
