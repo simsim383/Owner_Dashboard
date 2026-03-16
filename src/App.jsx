@@ -433,7 +433,7 @@ export default function App() {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
+      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
       case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
       case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
@@ -449,7 +449,7 @@ export default function App() {
       case "coming": return <ComingUpSection />;
       case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
+      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
   };
 
