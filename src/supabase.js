@@ -207,3 +207,78 @@ export async function claimOwnerId(id, inviteCode) {
   await sbPost("clients", [{ name: id, owner_name: id }]);
   return { ok: true };
 }
+
+// ─── PROMO STORAGE ──────────────────────────────────────────────
+export async function savePromoScan(clientId, scan, decisions, skips) {
+  const [scanRow] = await sbPost("promo_scans", [{
+    client_id: clientId, supplier: scan.source || "Unknown", promo_dates: scan.promoDates || "",
+    budget: scan.budget || 2500, total_spend: scan.totalSpend || 0, remaining: scan.remaining || 0,
+    est_revenue: scan.estRevenue || 0, est_profit: scan.estProfit || 0, roi: scan.roi || 0,
+    key_insight: scan.keyInsight || "", status: "active",
+    buy_count: decisions.filter(d => d.decision === "BUY").length,
+    test_count: decisions.filter(d => d.decision === "TEST").length,
+    skip_count: (skips || []).length,
+  }]);
+  // Save decisions
+  if (decisions.length > 0) {
+    await sbPost("promo_decisions", decisions.map(d => ({
+      scan_id: scanRow.id, client_id: clientId, product: d.product, source: d.source,
+      case_price: d.casePrice, por: d.por, rrp: d.rrp, vel: d.vel, qty: d.qty,
+      cover: d.cover, units: d.units, total_inc: d.totalInc, decision: d.decision, notes: d.notes,
+    })));
+  }
+  // Save price history for WoW comparison
+  if (decisions.length > 0) {
+    await sbPost("promo_price_history", decisions.filter(d => d.casePrice).map(d => ({
+      client_id: clientId, product: d.product, supplier: d.source, case_price: d.casePrice,
+      rrp: d.rrp, scan_id: scanRow.id,
+    })));
+  }
+  // Save skips
+  if (skips && skips.length > 0) {
+    await sbPost("promo_skips", skips.map(s => ({ scan_id: scanRow.id, product: s.product, reason: s.reason })));
+  }
+  return scanRow;
+}
+
+export async function loadPromoScans(clientId) {
+  return await sbGet("promo_scans", `client_id=eq.${clientId}&order=created_at.desc&limit=20`);
+}
+
+export async function loadPromoDecisions(scanId) {
+  return await sbGet("promo_decisions", `scan_id=eq.${scanId}&order=decision.asc`);
+}
+
+export async function loadPromoSkips(scanId) {
+  return await sbGet("promo_skips", `scan_id=eq.${scanId}`);
+}
+
+export async function loadPriceHistory(clientId, productName) {
+  return await sbGet("promo_price_history", `client_id=eq.${clientId}&product=eq.${encodeURIComponent(productName)}&order=scan_date.desc&limit=10`);
+}
+
+export async function loadAllPriceHistory(clientId) {
+  return await sbGet("promo_price_history", `client_id=eq.${clientId}&order=scan_date.desc&limit=500`);
+}
+
+export async function updatePromoDecision(decisionId, updates) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_decisions?id=eq.${decisionId}`, {
+    method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
+    body: JSON.stringify(updates),
+  });
+  if (!r.ok) throw new Error("Failed to update decision");
+  return r.json();
+}
+
+export async function deletePromoScan(scanId) {
+  await sbDelete("promo_scans", `id=eq.${scanId}`);
+  return { ok: true };
+}
+
+export async function saveCorrection(clientId, productPattern, correctionType, correctionValue) {
+  await sbPost("promo_corrections", [{ client_id: clientId, product_pattern: productPattern, correction_type: correctionType, correction_value: correctionValue }]);
+}
+
+export async function loadCorrections(clientId) {
+  return await sbGet("promo_corrections", `client_id=eq.${clientId}&order=created_at.desc&limit=100`);
+}
