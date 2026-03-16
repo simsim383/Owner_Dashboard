@@ -10,6 +10,7 @@ import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopS
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
+import LeafletScanner from "./Promos.jsx";
 
 // ─── SETTINGS SECTION ───────────────────────────────────────────
 function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
@@ -110,12 +111,13 @@ const monthlySections = [
   { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
 ];
 const alwaysSections = [
+  { id: "leaflet", label: "Leaflet Scanner", icon: "📸" },
   { id: "coming", label: "Coming Up", icon: "📅" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan supplier deals", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -443,6 +445,7 @@ export default function App() {
       case "density": return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
+      case "leaflet": return <LeafletScanner analysis={analysis} />;
       case "coming": return <ComingUpSection />;
       case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
