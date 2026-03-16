@@ -230,7 +230,7 @@ export default function LeafletScanner({ analysis }) {
 
             {/* Photo upload area */}
             <label style={{ display: "block", padding: "24px 16px", borderRadius: 12, border: `2px dashed ${C.border}`, background: C.surface, textAlign: "center", cursor: "pointer", marginBottom: 12 }}>
-              <input type="file" accept="image/*" multiple capture="environment" onChange={handlePhotos} style={{ display: "none" }} />
+              <input type="file" accept="image/*" multiple onChange={handlePhotos} style={{ display: "none" }} />
               <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
               <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Tap to take photo or upload</div>
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Multiple leaflet pages supported</div>
