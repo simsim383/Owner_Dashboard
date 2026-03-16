@@ -56,33 +56,61 @@ function PromoRow({ item, onEdit, priceHistory }) {
 
 const Mini = ({ label, value, color }) => (<div style={{ flex: "1 1 45%", background: C.surface, borderRadius: 8, padding: "8px 10px", border: `1px solid ${C.border}` }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div><div style={{ fontSize: 14, fontWeight: 800, color: color || C.white }}>{value}</div></div>);
 
-const SUPPLIERS = [
-  { code: "1DS", name: "Booker 1-Day Special" }, { code: "5DS", name: "Booker 5-Day Special" },
-  { code: "RTE", name: "Booker Retail Trade Event" }, { code: "CAT", name: "Booker Catalogue" },
-  { code: "TDD", name: "Costco Trade Day" }, { code: "PAR", name: "Parfetts" },
-  { code: "GMS", name: "United Wholesale (GMS)" }, { code: "OTH", name: "Other" },
-];
+const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
 function buildPrompt(analysis, budget, supplier, priceHist) {
   const vel = (analysis?.items || []).filter(i => i.qty >= 1).sort((a, b) => b.qty - a.qty).slice(0, 200).map(i => `${i.product} | ${i.qty}/wk | £${i.qty > 0 ? (i.gross / i.qty).toFixed(2) : "?"} | ${i.grossMargin != null ? Math.round(i.grossMargin) + "%" : "?"}`).join("\n");
   let prevCtx = "";
-  if (priceHist?.length) { const r = {}; priceHist.forEach(h => { if (!r[h.product]) r[h.product] = h; }); prevCtx = `\n\nPREVIOUS PRICES (flag if this week is DEARER):\n${Object.values(r).slice(0, 50).map(h => `${h.product}: £${h.case_price} (${h.supplier})`).join("\n")}`; }
+  if (priceHist?.length) { const r = {}; priceHist.forEach(h => { if (!r[h.product]) r[h.product] = h; }); prevCtx = `\n\nPREVIOUS PROMO PRICES (if this week is DEARER than these, SKIP it):\n${Object.values(r).slice(0, 50).map(h => `${h.product}: £${h.case_price} (${h.supplier})`).join("\n")}`; }
   return `Analyse promotion leaflet images for a Londis convenience store.
 SUPPLIER: ${supplier} | BUDGET: £${budget} inc VAT${prevCtx}
 
-EPOS DATA (product | vel/wk | price | margin):
+EPOS VELOCITY DATA — use these EXACT numbers for velocity (product | vel/wk | sell price | margin):
 ${vel}
 
-RULES: 1) Read ALL products from images. 2) Match by PM+size to EPOS. 3) Calculate POR=(RRP-cost inc VAT)/RRP×100. 4) Compare vs previous prices — DEARER=SKIP. 5) BUY: vel≥2+saving, cover 3-10wk. TEST: no history, qty=1. SKIP: dead/dearer. 6) 6x4=6 packs. 24x250ml=24 cans. Case prices EX VAT, add 20%. 7) Spend 97%+ budget. 8) If image unclear, note it.
+CRITICAL PRICE READING RULES:
+- READ the CASE PRICE (WSP) directly from the leaflet image. This is the large price shown for the WHOLESALE case.
+- The case price is typically labelled "WSP" or is the main price shown. It is NOT the retail/RRP price.
+- For example: if the leaflet shows "WSP: 6x4x568ml £23.49" then casePrice = 23.49
+- The smaller "RETAIL" or "PM" price is the RRP per sellable unit, NOT the case price.
+- DO NOT multiply case price by quantity — casePrice is the price for ONE case.
+- totalInc = casePrice × qty × 1.2 (add 20% VAT to total)
+- DOUBLE CHECK: if a case price seems over £50, verify it's not a 6-bottle spirit case price. If it seems too high for the product type, re-read the image.
 
-RESPOND ONLY with JSON (no markdown/backticks):
-{"source":"","promoDates":"","budget":${budget},"totalSpend":0,"remaining":0,"budgetPct":0,"estRevenue":0,"estProfit":0,"roi":0,"lines":{"buy":0,"test":0,"skip":0},"keyInsight":"","decisions":[{"product":"","source":"","casePrice":0,"por":0,"vel":0,"qty":0,"cover":"","units":0,"totalInc":0,"rrp":"","decision":"BUY","notes":""}],"skips":[{"product":"","reason":""}]}`;
+PACK STRUCTURE — READ CAREFULLY:
+- 6x4x568ml = 6 sellable 4-packs per case (sell each 4-pack at PM price)
+- 6x4x440ml = 6 sellable 4-packs per case
+- 24x250ml = 24 individual cans per case
+- 12x500ml = 12 individual bottles per case
+- 6x2ltr = 6 bottles per case
+- 6x70cl = 6 bottles per case (spirits)
+- units = sellable units per case × qty
+
+VELOCITY MATCHING:
+- Match products to EPOS by PM price code AND size
+- Use the EXACT velocity from the EPOS DATA above — do not estimate
+- If a product has no EPOS match, velocity = 0, decision = TEST or SKIP
+
+COVER CALCULATION:
+- cover weeks = (qty × units per case) / velocity per week
+- Max 10 weeks cover. Fast movers (10+/wk) min 4 weeks.
+
+DECISION LOGIC:
+- BUY: matched velocity ≥2/wk + genuine promo saving. Cover 3-10wk.
+- TEST: no/minimal EPOS history. Always qty=1 case.
+- SKIP: dead product (0 vel), dearer than previous promo, we don't stock the format (e.g. 20cl spirit bottles)
+
+POR = (RRP - cost per unit inc VAT) / RRP × 100
+Cost per unit inc VAT = (casePrice / units per case) × 1.2
+
+RESPOND ONLY with JSON (no markdown, no backticks, no explanation):
+{"source":"${supplier}","promoDates":"","budget":${budget},"totalSpend":0,"remaining":0,"budgetPct":0,"estRevenue":0,"estProfit":0,"roi":0,"lines":{"buy":0,"test":0,"skip":0},"keyInsight":"","decisions":[{"product":"full name with size","source":"${supplier}","casePrice":0,"por":0,"vel":0,"qty":0,"cover":"~Xwk","units":0,"totalInc":0,"rrp":"PM£X.XX","decision":"BUY","notes":"reasoning"}],"skips":[{"product":"","reason":""}]}`;
 }
 
 export default function LeafletScanner({ analysis, clientId }) {
   const [view, setView] = useState("menu");
   const [photos, setPhotos] = useState([]); const [previews, setPreviews] = useState([]);
-  const [budget, setBudget] = useState("2500"); const [supplier, setSupplier] = useState("1DS");
+  const [budget, setBudget] = useState("2500"); const [supplier, setSupplier] = useState("");
   const [scanning, setScanning] = useState(false); const [result, setResult] = useState(null); const [error, setError] = useState(null);
   const [history, setHistory] = useState([]); const [priceHist, setPriceHist] = useState([]);
   const [selScan, setSelScan] = useState(null); const [selDecs, setSelDecs] = useState([]); const [selSkips, setSelSkips] = useState([]);
@@ -98,7 +126,7 @@ export default function LeafletScanner({ analysis, clientId }) {
     setScanning(true); setError(null); setResult(null);
     try {
       const imgs = await Promise.all(photos.map(f => new Promise(res => { const r = new FileReader(); r.onload = () => res({ type: "image", source: { type: "base64", media_type: f.type || "image/jpeg", data: r.result.split(",")[1] } }); r.readAsDataURL(f); })));
-      const prompt = buildPrompt(analysis, parseInt(budget) || 2500, SUPPLIERS.find(s => s.code === supplier)?.name || supplier, priceHist);
+      const prompt = buildPrompt(analysis, parseInt(budget) || 2500, supplier || "Unknown supplier", priceHist);
       const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: AI_HDR, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [...imgs, { type: "text", text: prompt }] }] }) });
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json(); const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
@@ -138,7 +166,7 @@ export default function LeafletScanner({ analysis, clientId }) {
 
   // ── MENU ──
   if (view === "menu") return (
-    <SectionCard title="Leaflet Scanner" icon="📸" accent="rgba(34,197,94,0.06)">
+    <SectionCard title="Promotions" icon="📸" accent="rgba(34,197,94,0.06)">
       {!ANTHROPIC_KEY ? <EmptyState msg="API key required in Vercel settings" /> : <>
         <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>Upload supplier leaflet photos. AI analyses every product against your sales data.</div>
         <button onClick={() => setView("scan")} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: C.green, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16 }}>📷 Scan New Leaflet</button>
@@ -154,11 +182,11 @@ export default function LeafletScanner({ analysis, clientId }) {
   if (view === "scan") return (
     <SectionCard title="Scan Leaflet" icon="📷">
       <button onClick={() => { setView("menu"); setPhotos([]); setPreviews([]); setError(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
-      <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>Supplier</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-        {SUPPLIERS.map(s => <button key={s.code} onClick={() => setSupplier(s.code)} style={{ padding: "8px 12px", borderRadius: 8, border: "none", fontSize: 11, fontWeight: 600, cursor: "pointer", background: supplier === s.code ? C.accentLight : C.surface, color: supplier === s.code ? C.white : C.textMuted }}>{s.code}</button>)}
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>Supplier Name</div>
+      <input type="text" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="e.g. Booker 1-Day Special, Parfetts, Costco..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 6 }} />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+        {QUICK_SUPPLIERS.map(s => <button key={s} onClick={() => setSupplier(s)} style={{ padding: "6px 10px", borderRadius: 8, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", background: supplier === s ? C.accentLight : C.surface, color: supplier === s ? C.white : C.textMuted }}>{s}</button>)}
       </div>
-      <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 14 }}>{SUPPLIERS.find(s => s.code === supplier)?.name}</div>
       <label style={{ display: "block", padding: "24px 16px", borderRadius: 12, border: `2px dashed ${C.border}`, background: C.surface, textAlign: "center", cursor: "pointer", marginBottom: 12 }}>
         <input type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
         <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
@@ -170,7 +198,7 @@ export default function LeafletScanner({ analysis, clientId }) {
         <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}><span style={{ color: C.textMuted }}>£</span><input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} /></div>
       </div>
       {error && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.redDim, marginBottom: 12, fontSize: 12, color: C.redText }}>{error}</div>}
-      <button onClick={scan} disabled={scanning || !photos.length} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: photos.length ? C.green : C.surface, color: photos.length ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", opacity: scanning ? 0.7 : 1 }}>{scanning ? "🔍 Scanning..." : `🎯 Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}`}</button>
+      <button onClick={scan} disabled={scanning || !photos.length || !supplier.trim()} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: photos.length && supplier.trim() ? C.green : C.surface, color: photos.length && supplier.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", opacity: scanning ? 0.7 : 1 }}>{scanning ? "🔍 Scanning..." : photos.length && supplier.trim() ? `🎯 Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}` : !supplier.trim() ? "Enter supplier name" : "Upload a photo"}</button>
       {scanning && <div style={{ textAlign: "center", padding: 16, fontSize: 12, color: C.textMuted }}>Reading products, matching sales, comparing prices... (30-60s)</div>}
     </SectionCard>
   );
@@ -214,5 +242,5 @@ export default function LeafletScanner({ analysis, clientId }) {
       <div style={{ padding: "0 16px 20px" }}><button onClick={() => delScan(selScan.id)} style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑️ Delete Scan</button></div>
     </>);
   }
-  return <SectionCard title="Leaflet Scanner" icon="📸"><EmptyState msg="Loading..." /></SectionCard>;
+  return <SectionCard title="Promotions" icon="📸"><EmptyState msg="Loading..." /></SectionCard>;
 }
