@@ -14,36 +14,120 @@ export function AIChatSection({ analysis, allDays }) {
 
   const systemPrompt = useMemo(() => {
     const { summary, categories } = analysis;
-    const dailyBreakdown = allDays.map(d => {
+
+    // ── Date context ────────────────────────────────────────────
+    // Work out the date range covered and how many days
+    const sortedDays = [...allDays].sort((a, b) =>
+      (a.dates?.start || "").localeCompare(b.dates?.start || "")
+    );
+    const firstDay = sortedDays[0]?.dates?.start || null;
+    const lastDay = sortedDays[sortedDays.length - 1]?.dates?.start || null;
+    const numDays = allDays.length;
+    const today = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const daysUntilEndOfMay = (() => {
+      const now = new Date();
+      const endOfMay = new Date(now.getFullYear(), 4, 31); // May 31
+      if (now > endOfMay) {
+        // If we're past May, target end of May next year
+        const nextMay = new Date(now.getFullYear() + 1, 4, 31);
+        return Math.ceil((nextMay - now) / (1000 * 60 * 60 * 24));
+      }
+      return Math.ceil((endOfMay - now) / (1000 * 60 * 60 * 24));
+    })();
+
+    // ── Daily breakdown ──────────────────────────────────────────
+    const dailyBreakdown = sortedDays.map(d => {
       const g = d.items.reduce((s, i) => s + i.gross, 0);
       const q = d.items.reduce((s, i) => s + i.qty, 0);
       const p = d.items.filter(i => i.hasCost).reduce((s, i) => s + (i.grossProfit || 0), 0);
       const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
-      return `${day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?"} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units, £${p.toFixed(0)} profit${d.transactions ? `, ${d.transactions} trans, £${(g / d.transactions).toFixed(2)} basket` : ""}`;
+      return `${day ? day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "?"}: £${g.toFixed(0)} rev, ${q} units, £${p.toFixed(0)} profit${d.transactions ? `, ${d.transactions} trans, £${(g / d.transactions).toFixed(2)} basket` : ""}`;
     }).join("\n");
-    const catS = categories.slice(0, 15).map(c => `${c.name}: £${c.gross.toFixed(0)} (${c.pctRev.toFixed(0)}%), ${c.margin.toFixed(1)}% margin, ${c.qty} units`).join("\n");
-    const top = [...analysis.items].sort((a, b) => b.gross - a.gross).slice(0, 30).map(i => `${i.product}(${i.category}):qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
-    return `You are an expert retail advisor for a UK convenience store. ${allDays.length} days of data.
 
-SUMMARY: £${summary.totalGross.toFixed(0)} rev, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
+    // ── Category summary ─────────────────────────────────────────
+    const catS = categories.map(c =>
+      `${c.name}: £${c.gross.toFixed(0)} (${c.pctRev.toFixed(0)}%), ${c.margin.toFixed(1)}% margin, ${c.qty} units, ${c.count} products`
+    ).join("\n");
 
-DAILY:\n${dailyBreakdown}
+    // ── ALL products, grouped by category ────────────────────────
+    // This is the critical fix: send ALL products, not just top 30
+    // Group by category so AI can answer category-specific questions accurately
+    const productsByCategory = {};
+    analysis.items.forEach(i => {
+      if (!productsByCategory[i.category]) productsByCategory[i.category] = [];
+      productsByCategory[i.category].push(i);
+    });
 
-CATEGORIES:\n${catS}
+    // Sort each category's products by qty descending
+    Object.keys(productsByCategory).forEach(cat => {
+      productsByCategory[cat].sort((a, b) => b.qty - a.qty);
+    });
 
-TOP 30:\n${top}
+    // Build the product data string — all products with key metrics
+    // Format: PRODUCT(category):qty=N,rev=£X,margin=Y%|UNTRACKED
+    const allProductsStr = Object.entries(productsByCategory)
+      .sort(([, a], [, b]) => b.reduce((s, i) => s + i.gross, 0) - a.reduce((s, i) => s + i.gross, 0))
+      .map(([cat, items]) => {
+        const catTotal = items.reduce((s, i) => s + i.gross, 0);
+        const lines = items.map(i =>
+          `  ${i.product}:qty=${i.qty},rev=£${i.gross.toFixed(2)}${i.hasCost ? `,margin=${i.grossMargin?.toFixed(1)}%,profit=£${(i.grossProfit || 0).toFixed(2)}` : ",UNTRACKED"}`
+        ).join("\n");
+        return `[${cat} — £${catTotal.toFixed(0)} total, ${items.length} products]\n${lines}`;
+      }).join("\n\n");
+
+    // ── Daily velocity for ordering calculations ─────────────────
+    // Per-product daily average based on actual days of data
+    const velocityNote = numDays > 0
+      ? `DATA COVERS ${numDays} DAY${numDays > 1 ? "S" : ""} (${firstDay || "?"} to ${lastDay || "?"}). ` +
+        `To calculate daily rate: divide any product's qty by ${numDays}. ` +
+        `To calculate how many to order for N days: (qty ÷ ${numDays}) × N, then round up to case size.`
+      : "NUMBER OF DAYS UNKNOWN — cannot calculate daily rates.";
+
+    return `You are an expert retail advisor for a UK convenience store. Answer questions based ONLY on the data below.
+
+TODAY: ${today}
+DAYS UNTIL END OF MAY: ${daysUntilEndOfMay}
+${velocityNote}
+
+DATA PERIOD: ${firstDay || "unknown"} to ${lastDay || "unknown"} (${numDays} days)
+
+STORE SUMMARY:
+• Revenue: £${summary.totalGross.toFixed(0)}
+• Tracked profit: £${summary.trackedProfit.toFixed(0)} at ${summary.trackedMargin.toFixed(1)}% margin
+• Products sold: ${summary.productCount} (${summary.untrackedCount} untracked = £${summary.untrackedRevenue.toFixed(0)})
+
+DAILY BREAKDOWN:
+${dailyBreakdown}
+
+CATEGORIES:
+${catS}
+
+ALL PRODUCTS (sorted by qty within each category, highest first = best sellers, lowest last = worst sellers):
+${allProductsStr}
+
+ORDERING CALCULATION METHOD:
+When asked "how many cases of X to last until [date]":
+1. Find X in the product list above and note its qty over ${numDays} days
+2. Calculate daily rate = qty ÷ ${numDays} (round to 1 decimal)
+3. Calculate days needed = days until that date from today
+4. Calculate total units needed = daily rate × days needed
+5. Calculate cases = ceil(total units ÷ case size)
+6. Show your working: "X sold Y units over ${numDays} days = Z/day. To last N days = Y×Z = W units = C cases of size S"
+Always show the calculation steps so the owner can verify.
 
 RULES:
 • Use bullet points, bold key numbers
-• Keep under 150 words
+• Keep under 200 words
 • Lead with the direct answer, then supporting data
 • Reference actual product names and numbers from the data
 • End with one clear action
-• NEVER suggest price increases on price-marked items (any product with "Pm" in its name — e.g. Pm279, Pm219 — has a fixed price printed on the pack)
+• For "worst selling" questions: look at the LOWEST qty items within that category from the product list above
+• For "best selling" questions: look at the HIGHEST qty items within that category
+• NEVER suggest price increases on price-marked items (any product with "Pm" in its name e.g. Pm279, Pm219 — fixed price on pack)
 • NEVER suggest price increases on tobacco or cigarettes
 • NEVER suggest milk as a price increase candidate unless specifically asked
 • When asked about pricing, only suggest NON-price-marked, non-tobacco items
-• If asked what to raise prices on, filter to items where the owner controls pricing`;
+• If you cannot find a product in the data, say so clearly — do not guess`;
   }, [analysis, allDays]);
 
   const send = useCallback(async () => {
@@ -59,13 +143,16 @@ RULES:
     }
 
     try {
-      const recent = [...messages, { role: "user", content: msg }].slice(-4);
+      const recent = [...messages, { role: "user", content: msg }].slice(-6);
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 500, system: systemPrompt, messages: recent }),
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 600, system: systemPrompt, messages: recent }),
       });
       const data = await res.json();
-      if (data.error) { setMessages(p => [...p, { role: "assistant", content: `API error: ${data.error.message}` }]); setLoading(false); return; }
+      if (data.error) {
+        setMessages(p => [...p, { role: "assistant", content: `API error: ${data.error.message}` }]);
+        setLoading(false); return;
+      }
       const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "No response.";
       setMessages(p => [...p, { role: "assistant", content: text }]);
     } catch (e) {
@@ -75,7 +162,14 @@ RULES:
     setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 100);
   }, [input, loading, messages, systemPrompt]);
 
-  const suggestions = ["What day should I have two staff?", "Most profitable category?", "Which costs should I enter first?", "What should I stock more of?", "Am I losing money anywhere?", "What's my average basket spend?"];
+  const suggestions = [
+    "What's my worst selling wine this week?",
+    "How many cases of Red Bull 250ml should I order to last until end of May?",
+    "What day should I have two staff?",
+    "Most profitable category?",
+    "Which costs should I enter first?",
+    "Am I losing money anywhere?",
+  ];
 
   return (
     <SectionCard title="AI Assistant" icon="🤖" accent="rgba(59,130,246,0.08)">
@@ -104,7 +198,6 @@ RULES:
         )}
       </div>
 
-      {/* Textarea input instead of single-line input */}
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
         <textarea
           value={input}
@@ -115,148 +208,135 @@ RULES:
           maxLength={500}
           style={{ flex: 1, padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "'Inter', sans-serif", resize: "none", lineHeight: 1.4 }}
         />
-        <button onClick={send} disabled={loading || !input.trim()} style={{ padding: "10px 16px", borderRadius: 10, border: "none", cursor: "pointer", background: input.trim() ? C.accentLight : C.surface, color: input.trim() ? C.white : C.textMuted, fontSize: 13, fontWeight: 700, alignSelf: "stretch" }}>Send</button>
+        <button
+          onClick={send}
+          disabled={loading || !input.trim()}
+          style={{ padding: "10px 16px", borderRadius: 10, border: "none", cursor: "pointer", background: input.trim() ? C.accentLight : C.surface, color: input.trim() ? C.white : C.textMuted, fontWeight: 700, fontSize: 13, transition: "all 0.15s", flexShrink: 0 }}
+        >
+          {loading ? "..." : "Ask"}
+        </button>
+      </div>
+      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 6 }}>
+        {allDays.length} day{allDays.length !== 1 ? "s" : ""} of data · {analysis.items.length} products · Press Enter to send
       </div>
     </SectionCard>
   );
 }
 
 // ─── COMING UP ──────────────────────────────────────────────────
-export function ComingUpSection() {
+export function ComingUpSection({ analysis, allDays }) {
   const [events, setEvents] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!ANTHROPIC_KEY) { setEvents([]); return; }
-    let c = false;
-    (async () => {
-      setLoading(true);
-      try {
-        // Calculate key dates to feed to the AI so it doesn't hallucinate
-        const now = new Date();
-        const todayStr = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-        
-        // Find last Friday of current month (payday)
-        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        while (lastDay.getDay() !== 5) lastDay.setDate(lastDay.getDate() - 1);
-        const paydayStr = lastDay.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
-        const paydayDays = Math.max(0, Math.round((lastDay - now) / 86400000));
-
-        const prompt = `Today is ${todayStr}. List 6-8 upcoming events for a UK convenience store in County Durham (Peterlee/Horden). 
-
-VERIFIED 2026 UK DATES (use these exactly):
-- Mother's Day UK: Sunday 15 March 2026 (Mothering Sunday)
-- St Patrick's Day: Tuesday 17 March 2026
-- Payday Friday: ${paydayStr} (${paydayDays} days away)
-- Good Friday: Friday 3 April 2026
-- Easter Sunday: Sunday 5 April 2026
-- Easter Monday: Monday 6 April 2026
-- School Easter holidays: approx 30 March - 10 April 2026
-- Early May Bank Holiday: Monday 4 May 2026
-- Spring Bank Holiday: Monday 25 May 2026
-- Ramadan 2026: started approx 28 February, ends approx 29 March
-- Eid al-Fitr 2026: approx Sunday 29 March 2026
-
-RULES:
-1. URGENT = 0-3 days away. PLAN = 4-14 days. AWARE = 15+ days.
-2. Calculate "days" from today ${todayStr}. If an event is TODAY, say "TODAY".
-3. Give specific stock advice in the "impact" field.
-4. Only include events within the next 6 weeks from today.
-5. If an event has passed (before today), do NOT include it.
-
-Respond with ONLY a JSON array: [{event, date, days, impact, priority}]`;
-
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", headers: AI_HDR,
-          body: JSON.stringify({ model: AI_MODEL, max_tokens: 800, messages: [{ role: "user", content: prompt }] }),
-        });
-        if (!res.ok) { console.error("Coming Up API:", res.status); if (!c) setEvents([]); setLoading(false); return; }
-        const data = await res.json();
-        if (data.error) { console.error("Coming Up error:", data.error); if (!c) setEvents([]); setLoading(false); return; }
-        const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-        const clean = text.replace(/```json|```/g, "").trim();
-        try { if (!c) setEvents(JSON.parse(clean)); }
-        catch { console.error("Coming Up parse fail:", clean.slice(0, 300)); if (!c) setEvents([]); }
-      } catch (e) { console.error("Coming Up:", e); if (!c) setEvents([]); }
-      if (!c) setLoading(false);
-    })();
-    return () => { c = true; };
+  const fetchEvents = useCallback(async () => {
+    setLoading(true); setError(null);
+    if (!ANTHROPIC_KEY) { setError("API key not configured."); setLoading(false); return; }
+    const today = new Date();
+    const in6weeks = new Date(today); in6weeks.setDate(today.getDate() + 42);
+    const fmt = d => d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: AI_HDR,
+        body: JSON.stringify({
+          model: AI_MODEL, max_tokens: 800,
+          messages: [{
+            role: "user",
+            content: `You are a UK convenience store advisor. List 6-8 upcoming events, dates, or occasions between ${fmt(today)} and ${fmt(in6weeks)} that are relevant for a UK convenience store to prepare stock for. Include: public holidays, sporting events, school holidays, seasonal occasions. For each give: event name, date, and 2-3 specific products to stock up on. Format as JSON array: [{"event":"...","date":"...","products":["...","...","..."]}]. Return ONLY the JSON array, no other text.`
+          }]
+        }),
+      });
+      const data = await res.json();
+      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "[]";
+      const clean = text.replace(/```json|```/g, "").trim();
+      setEvents(JSON.parse(clean));
+    } catch (e) {
+      setError("Could not load events: " + e.message);
+    }
+    setLoading(false);
   }, []);
 
+  useEffect(() => { fetchEvents(); }, []);
+
+  if (loading) return <SectionCard title="Coming Up" icon="📅"><EmptyState msg="Loading upcoming events..." /></SectionCard>;
+  if (error) return <SectionCard title="Coming Up" icon="📅"><EmptyState msg={error} /></SectionCard>;
+  if (!events?.length) return <SectionCard title="Coming Up" icon="📅"><EmptyState msg="No events loaded." /></SectionCard>;
+
   return (
-    <SectionCard title="Coming Up" icon="📅">
-      {loading && <div style={{ textAlign: "center", padding: 20, color: C.textMuted, fontSize: 13 }}>Loading events...</div>}
-      {!ANTHROPIC_KEY && <EmptyState msg="Add API key to enable Coming Up" />}
-      {events?.length === 0 && ANTHROPIC_KEY && <EmptyState msg="Could not load events" />}
-      {events?.map((e, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ flex: 1, marginRight: 8 }}>
-            <div style={{ fontSize: 13, color: C.white, fontWeight: 600, marginBottom: 2 }}>{e.event}</div>
-            <div style={{ fontSize: 11, color: C.textMuted }}>{e.date} · {e.days}</div>
-            <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 4, lineHeight: 1.4 }}>{e.impact}</div>
+    <SectionCard title="Coming Up — Next 6 Weeks" icon="📅">
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {events.map((e, i) => (
+          <div key={i} style={{ padding: "12px 14px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: C.white }}>{e.event}</div>
+              <div style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, marginLeft: 8 }}>{e.date}</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {(e.products || []).map((p, j) => (
+                <span key={j} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: C.card, color: C.textSecondary, border: `1px solid ${C.divider}` }}>{p}</span>
+              ))}
+            </div>
           </div>
-          <Badge type={e.priority === "URGENT" ? "ALERT" : e.priority === "PLAN" ? "MED" : "OK"}>{e.priority}</Badge>
-        </div>
-      ))}
+        ))}
+      </div>
+      <button onClick={fetchEvents} style={{ marginTop: 12, width: "100%", padding: "10px", borderRadius: 10, border: `1px solid ${C.border}`, background: "none", color: C.textMuted, fontSize: 12, cursor: "pointer" }}>
+        Refresh Events
+      </button>
     </SectionCard>
   );
 }
 
 // ─── NEWS ───────────────────────────────────────────────────────
 export function NewsSection() {
-  const [news, setNews] = useState(null);
+  const [articles, setArticles] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!ANTHROPIC_KEY) { setNews([]); return; }
-    let c = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", headers: AI_HDR,
-          body: JSON.stringify({
-            model: AI_MODEL, max_tokens: 1000,
-            messages: [{ role: "user", content: "Search for 5 recent UK convenience store and grocery retail news stories from this week. Include stories about: supplier price changes, Booker/Nisa/Londis/Premier promotions, wholesale deals, tobacco/vape regulation, and grocery trends. For each: title, source (publication name), summary (1 sentence), url (real URL), timeAgo. ONLY respond with a JSON array. No markdown, no backticks, no explanation." }],
-            tools: [{ type: "web_search_20250305", name: "web_search" }],
-          }),
-        });
-        if (!res.ok) { console.error("News API:", res.status); if (!c) setNews([]); setLoading(false); return; }
-        const data = await res.json();
-        if (data.error) { console.error("News error:", data.error); if (!c) setNews([]); setLoading(false); return; }
-        const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-        const clean = text.replace(/```json|```/g, "").trim();
-        try { if (!c && clean) setNews(JSON.parse(clean).slice(0, 5)); else if (!c) setNews([]); }
-        catch { console.error("News parse fail:", clean.slice(0, 200)); if (!c) setNews([]); }
-      } catch (e) { console.error("News:", e); if (!c) setNews([]); }
-      if (!c) setLoading(false);
-    })();
-    return () => { c = true; };
+  const fetchNews = useCallback(async () => {
+    setLoading(true); setError(null);
+    if (!ANTHROPIC_KEY) { setError("API key not configured."); setLoading(false); return; }
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: AI_HDR,
+        body: JSON.stringify({
+          model: AI_MODEL, max_tokens: 800,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{
+            role: "user",
+            content: "Search for the latest UK convenience store and independent retail news from the past 2 weeks. Find 5 relevant articles. Return as JSON array: [{\"title\":\"...\",\"summary\":\"...\",\"source\":\"...\",\"url\":\"...\"}]. ONLY return the JSON array."
+          }]
+        }),
+      });
+      const data = await res.json();
+      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "[]";
+      const clean = text.replace(/```json|```/g, "").trim();
+      setArticles(JSON.parse(clean));
+    } catch (e) {
+      setError("Could not load news: " + e.message);
+    }
+    setLoading(false);
   }, []);
 
+  useEffect(() => { fetchNews(); }, []);
+
+  if (loading) return <SectionCard title="Retail News" icon="📰"><EmptyState msg="Loading latest news..." /></SectionCard>;
+  if (error) return <SectionCard title="Retail News" icon="📰"><EmptyState msg={error} /></SectionCard>;
+  if (!articles?.length) return <SectionCard title="Retail News" icon="📰"><EmptyState msg="No articles loaded." /></SectionCard>;
+
   return (
-    <div style={{ paddingTop: 4 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: C.white }}>Retail News</div>
-          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>UK convenience & grocery</div>
-        </div>
+    <SectionCard title="Retail News" icon="📰">
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {articles.map((a, i) => (
+          <a key={i} href={a.url} target="_blank" rel="noreferrer" style={{ display: "block", padding: "12px 14px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, textDecoration: "none" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: C.white, marginBottom: 4 }}>{a.title}</div>
+            <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.5, marginBottom: 6 }}>{a.summary}</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>{a.source}</div>
+          </a>
+        ))}
       </div>
-      {loading && <div style={{ textAlign: "center", padding: 32, color: C.textMuted, fontSize: 13 }}>Loading news...</div>}
-      {!ANTHROPIC_KEY && <EmptyState msg="Add API key to enable News" />}
-      {news?.length === 0 && ANTHROPIC_KEY && <EmptyState msg="Could not load news — try refreshing" />}
-      {news?.map((item, i) => (
-        <a key={i} href={item.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none", display: "block" }}>
-          <div style={{ padding: "14px 16px", marginBottom: 8, borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", letterSpacing: 0.5 }}>{item.source}</span>
-              <span style={{ fontSize: 11, color: C.textMuted }}>{item.timeAgo || ""}</span>
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.white, lineHeight: 1.4, marginBottom: 4 }}>{item.title}</div>
-            {item.summary && <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.4 }}>{item.summary}</div>}
-          </div>
-        </a>
-      ))}
-    </div>
+      <button onClick={fetchNews} style={{ marginTop: 12, width: "100%", padding: "10px", borderRadius: 10, border: `1px solid ${C.border}`, background: "none", color: C.textMuted, fontSize: 12, cursor: "pointer" }}>
+        Refresh News
+      </button>
+    </SectionCard>
   );
 }
