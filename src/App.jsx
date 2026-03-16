@@ -111,13 +111,13 @@ const monthlySections = [
   { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
 ];
 const alwaysSections = [
-  { id: "leaflet", label: "Leaflet Scanner", icon: "📸" },
+  { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "coming", label: "Coming Up", icon: "📅" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan supplier deals", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
