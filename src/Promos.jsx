@@ -140,7 +140,8 @@ function findEposMatch(leafletProduct, eposMatch, velMap) {
     const searchWords = search.split(/\s+/);
     if (eposWords[0] !== matchBrand) continue;
     if (requiredVariants.length > 0 && !requiredVariants.every(kw => eposName.includes(kw))) continue;
-    const commonWords = eposWords.filter(w => searchWords.some(sw => sw.includes(w) || w.includes(sw)));
+    // Require words longer than 3 chars so "dr"/"pm" don't count as meaningful matches
+    const commonWords = eposWords.filter(w => w.length > 3 && searchWords.some(sw => sw.includes(w) || w.includes(sw)));
     if (commonWords.length >= 2) return v;
   }
 
@@ -368,10 +369,18 @@ STEP C: If no exact three-way match, try brand + variant only (drop PM requireme
 STEP D: If still no match, return null — do NOT pick the closest unrelated product
 
 CRITICAL RULES:
-1. VARIANT IS MANDATORY. Cherry ≠ Original ≠ Zero ≠ Diet ≠ Max ≠ Sugar Free.
-   A promo for Cherry MUST match an EPOS name containing Cherry. No exceptions.
-   If the promo says Cherry and EPOS has "Dr Pepper Zero Cherry" — that IS the match.
-   If the promo says Cherry and EPOS has NO cherry variant → return null.
+1. VARIANT IS MANDATORY — this is the most important rule.
+   Cherry ≠ Original ≠ Zero ≠ Diet ≠ Max ≠ Sugar Free ≠ any other flavour.
+   
+   WORKED EXAMPLE — "Dr Pepper Cherry 12x500ml PM£1.40":
+   ✓ CORRECT: "Dr Pepper Zero Cherry Pm140" — has Cherry AND Pm140
+   ✗ WRONG:   "Dr Pepper Pm140"             — no Cherry in name, REJECT even if PM matches
+   ✗ WRONG:   "Dr Pepper Cherry Pm215"      — wrong PM code, REJECT
+   ✗ WRONG:   "Pepsi Max Cherry Pm139"      — wrong brand entirely, REJECT
+   
+   If the promo product has a flavour/variant word and your chosen EPOS name does NOT
+   contain that exact word → that is the WRONG match. Return null instead.
+   Do not substitute the plain version for the flavoured version. Ever.
 2. PM CODE IS MANDATORY where it exists in EPOS. Pm140 ≠ Pm215. Different PM = different product.
 3. BRAND MUST MATCH exactly. "I Heart Prosecco" cannot match "Hardys". "Heineken" cannot match "Fosters".
 4. 6x4 PACK FORMAT: "Heineken 6x4x440ml PM£6.59" → EPOS match is "Heineken Pm659" (4-pack sells at £6.59).
@@ -505,26 +514,36 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
       setScanStep("Step 1/3: Reading leaflet...");
       const s1 = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 3000, messages: [{ role: "user", content: [...imgs, { type: "text", text: step1Prompt(supplier) }] }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 8000, messages: [{ role: "user", content: [...imgs, { type: "text", text: step1Prompt(supplier) }] }] }),
       });
-      if (!s1.ok) throw new Error(`Step 1 failed: ${s1.status}`);
-      let s1text = ((await s1.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      if (!s1.ok) throw new Error(`Step 1 failed: ${s1.status} — check API key`);
+      const s1json = await s1.json();
+      if (s1json.error) throw new Error(`Step 1 error: ${s1json.error.message || s1json.error.type}`);
+      let s1text = (s1json.content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
       const j1s = s1text.indexOf("["); const j1e = s1text.lastIndexOf("]");
-      if (j1s >= 0) s1text = s1text.slice(j1s, j1e + 1);
-      const extracted = JSON.parse(s1text);
+      if (j1s < 0) throw new Error("No products found in leaflet. Try a clearer photo.");
+      s1text = s1text.slice(j1s, j1e + 1);
+      let extracted;
+      try { extracted = JSON.parse(s1text); }
+      catch { throw new Error("Too many products for one scan — try uploading photos one at a time."); }
       if (!Array.isArray(extracted) || !extracted.length) throw new Error("No products found. Try a clearer photo.");
 
       // ── STEP 2: Match products to EPOS ──
       setScanStep(`Step 2/3: Matching ${extracted.length} products to EPOS...`);
       const s2 = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: step2Prompt(extracted, eposNames) }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: step2Prompt(extracted, eposNames) }] }),
       });
       if (!s2.ok) throw new Error(`Step 2 failed: ${s2.status}`);
-      let s2text = ((await s2.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      const s2json = await s2.json();
+      if (s2json.error) throw new Error(`Step 2 error: ${s2json.error.message || s2json.error.type}`);
+      let s2text = (s2json.content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
       const j2s = s2text.indexOf("["); const j2e = s2text.lastIndexOf("]");
-      if (j2s >= 0) s2text = s2text.slice(j2s, j2e + 1);
-      const matches = JSON.parse(s2text);
+      if (j2s < 0) throw new Error("Matching step failed — please try again.");
+      s2text = s2text.slice(j2s, j2e + 1);
+      let matches;
+      try { matches = JSON.parse(s2text); }
+      catch { matches = []; } // if matching JSON is bad, proceed with no matches (all go to TEST/SKIP)
 
       // ── STEP 3: JavaScript calculates everything ──
       setScanStep("Step 3/3: Calculating decisions...");
@@ -533,7 +552,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         const eposName = match.epos_match;
         let epos       = null;
 
-        // Primary: use AI match with brand validation
+        // Primary: use AI match with brand AND variant pre-validation
         if (eposName && eposName !== "null" && eposName !== "No match") {
           const promoBrand   = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
           const matchBrand   = (eposName || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
@@ -541,25 +560,46 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
             eposName.toLowerCase().includes(promoBrand) ||
             (prod.product_name || "").toLowerCase().includes(matchBrand);
 
-          if (brandsRelated) {
+          // VARIANT PRE-CHECK: before calling findEposMatch, verify the AI's
+          // suggested EPOS name actually contains all variant keywords from the promo.
+          // This catches cases where AI correctly reads "Dr Pepper Cherry" in Step 1
+          // but then matches to "Dr Pepper Pm140" (no cherry) in Step 2.
+          const promoNameLower  = (prod.product_name || "").toLowerCase();
+          const eposNameLower   = (eposName || "").toLowerCase();
+          const promoVariants   = VARIANT_KEYWORDS.filter(kw => promoNameLower.includes(kw));
+          const variantsMissing = promoVariants.filter(kw => !eposNameLower.includes(kw));
+
+          // If any variant keyword from the promo is absent from the AI's EPOS match → reject it
+          const variantCheckPassed = variantsMissing.length === 0;
+
+          if (brandsRelated && variantCheckPassed) {
             epos = findEposMatch(prod.product_name, eposName, velMap);
           }
+          // If variant check failed, epos stays null → falls through to Strategy A fallback
+          // which also enforces variants, so it will correctly return no match
         }
 
-        // JS Fallback: Strategy A only — brand + PM code with startsWith (strict, no fuzzy)
+        // JS Fallback: Strategy A only — brand + PM code + variant (strict, no fuzzy)
         // Strategies B (sell price) and C (keyword) removed — they cause false matches
         if (!epos) {
           const promoRrp = (prod.rrp || "").replace(/[^0-9.]/g, "");
           const pmCode   = promoRrp.replace(".", ""); // "6.59" → "659"
           const brand    = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          // Extract required variants from promo name — same logic as findEposMatch
+          const promoLower      = (prod.product_name || "").toLowerCase();
+          const fallbackVariants = VARIANT_KEYWORDS.filter(kw => promoLower.includes(kw));
 
           if (brand && pmCode && pmCode.length >= 2) {
             for (const v of Object.values(velMap)) {
               const ep = v.product.toLowerCase();
-              if (ep.startsWith(brand) && ep.includes(`pm${pmCode}`)) {
-                epos = v;
-                break;
-              }
+              if (!ep.startsWith(brand)) continue;
+              if (!ep.includes(`pm${pmCode}`)) continue;
+              // VARIANT CHECK: all required variants must be present in EPOS name
+              if (fallbackVariants.length > 0 && !fallbackVariants.every(kw => ep.includes(kw))) continue;
+              // VARIANT CHECK: if promo has no variants, reject EPOS names that do
+              if (fallbackVariants.length === 0 && VARIANT_KEYWORDS.some(kw => ep.includes(kw))) continue;
+              epos = v;
+              break;
             }
           }
         }
