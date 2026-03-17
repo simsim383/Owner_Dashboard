@@ -6,7 +6,7 @@ import { C, SectionCard, Badge, EmptyState, fi, f } from "./components.jsx";
 import { ANTHROPIC_KEY, AI_HDR } from "./config.js";
 import { savePromoScan, loadPromoScans, loadPromoDecisions, loadPromoSkips, loadAllPriceHistory, updatePromoDecision, deletePromoScan, saveCorrection } from "./supabase.js";
 
-const MAX_SCANS_PER_WEEK = 5;
+const MAX_SCANS_PER_WEEK = 100;
 const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
 // ═══════════════════════════════════════════════════════════════════
