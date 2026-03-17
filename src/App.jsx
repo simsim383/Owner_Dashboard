@@ -445,7 +445,7 @@ export default function App() {
       case "density": return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
-      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} />;
+      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "coming": return <ComingUpSection />;
       case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
