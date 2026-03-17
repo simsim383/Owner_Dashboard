@@ -1,14 +1,258 @@
 // ═══════════════════════════════════════════════════════════════════
-// PROMOS v3 — Two-step AI scan, weekly cap, PM+size matching
+// PROMOS v4 — JS calculates everything, AI reads images + matches only
 // ═══════════════════════════════════════════════════════════════════
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { C, SectionCard, Badge, EmptyState, fi, f } from "./components.jsx";
 import { ANTHROPIC_KEY, AI_HDR } from "./config.js";
 import { savePromoScan, loadPromoScans, loadPromoDecisions, loadPromoSkips, loadAllPriceHistory, updatePromoDecision, deletePromoScan, saveCorrection } from "./supabase.js";
 
 const MAX_SCANS_PER_WEEK = 5;
+const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
-// ─── PROMO ROW ──────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// VELOCITY ENGINE — calculates blended weekly velocity from EPOS data
+// ═══════════════════════════════════════════════════════════════════
+function buildVelocityMap(allDays) {
+  if (!allDays || !allDays.length) return {};
+  // Sort days by date
+  const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+  const totalDays = sorted.length;
+
+  // Last 7 days
+  const last7 = sorted.slice(-Math.min(7, totalDays));
+  // Last 28 days (monthly)
+  const last28 = sorted.slice(-Math.min(28, totalDays));
+  const monthWeeks = Math.max(1, last28.length / 7);
+
+  // Aggregate by product for each period
+  const agg = (days) => {
+    const map = {};
+    days.forEach(d => d.items.forEach(i => {
+      const key = (i.barcode || i.product).toLowerCase();
+      if (!map[key]) map[key] = { product: i.product, barcode: i.barcode, category: i.category, qty: 0, gross: 0, grossMargin: i.grossMargin, hasCost: i.hasCost };
+      map[key].qty += i.qty;
+      map[key].gross += i.gross;
+      if (i.grossMargin != null) map[key].grossMargin = i.grossMargin;
+    }));
+    return map;
+  };
+
+  const weekMap = agg(last7);
+  const monthMap = agg(last28);
+
+  // Build blended velocity map
+  const result = {};
+  const allKeys = new Set([...Object.keys(weekMap), ...Object.keys(monthMap)]);
+
+  allKeys.forEach(key => {
+    const w = weekMap[key];
+    const m = monthMap[key];
+    const product = (w || m).product;
+    const weeklyVel = w ? w.qty : 0; // Actual units sold in last 7 days
+    const monthlyAvg = m ? Math.round((m.qty / monthWeeks) * 10) / 10 : 0; // Monthly weekly average
+    // Blended: 70% recent (last 7 days), 30% monthly average
+    const blended = Math.round(((0.7 * weeklyVel) + (0.3 * monthlyAvg)) * 10) / 10;
+    const sellPrice = (m || w).qty > 0 ? Math.round(((m || w).gross / (m || w).qty) * 100) / 100 : 0;
+
+    result[key] = {
+      product, barcode: (w || m).barcode, category: (w || m).category,
+      weeklyVel, monthlyAvg, blended,
+      sellPrice, grossMargin: (w || m).grossMargin, hasCost: (w || m).hasCost,
+    };
+  });
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MATCHING ENGINE — finds EPOS match for a leaflet product
+// ═══════════════════════════════════════════════════════════════════
+function findEposMatch(leafletProduct, eposMatch, velMap) {
+  if (!eposMatch) return null;
+  const search = eposMatch.toLowerCase().trim();
+  // Direct key match
+  if (velMap[search]) return velMap[search];
+  // Search by product name
+  for (const v of Object.values(velMap)) {
+    if (v.product.toLowerCase() === search) return v;
+  }
+  // Partial match — product name contains the search term
+  for (const v of Object.values(velMap)) {
+    if (v.product.toLowerCase().includes(search) || search.includes(v.product.toLowerCase())) return v;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DECISION ENGINE — calculates POR, cover, qty, decision
+// ═══════════════════════════════════════════════════════════════════
+function calculateDecisions(matchedProducts, budget) {
+  const decisions = [];
+  const skips = [];
+  let totalSpend = 0;
+
+  // First pass — calculate everything
+  matchedProducts.forEach(item => {
+    const { product_name, case_price, rrp_num, units_per_case, epos, eposMatch } = item;
+    const vel = epos ? epos.blended : 0;
+    const cp = Number(case_price) || 0;
+    const upc = Number(units_per_case) || 1;
+    const rrp = Number(rrp_num) || 0;
+
+    // POR calculation
+    const costPerUnitExVat = cp / upc;
+    const costPerUnitIncVat = costPerUnitExVat * 1.2;
+    const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
+
+    // Decision logic
+    if (vel < 0.5 && (!epos || epos.weeklyVel === 0)) {
+      // Zero or near-zero velocity — TEST or SKIP
+      if (cp > 0 && por >= 25) {
+        // Interesting POR, test with 1 case
+        const totalInc = Math.round(cp * 1 * 1.2 * 100) / 100;
+        decisions.push({
+          product: product_name, eposMatch: eposMatch || "No match", source: item.source || "",
+          casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty: 1,
+          cover: "TEST", units: upc, totalInc, rrp: item.rrp || "",
+          decision: "TEST", notes: `No/low EPOS velocity (${vel}/wk). Testing with 1 case. ${por}% POR.`,
+        });
+        totalSpend += totalInc;
+      } else {
+        skips.push({ product: product_name, reason: `Zero velocity in EPOS${por > 0 ? `, ${por}% POR` : ""}. No demand signal.` });
+      }
+      return;
+    }
+
+    // Calculate cover and qty
+    let targetWeeks;
+    if (vel >= 10) targetWeeks = 8; // Fast movers: aim for 8wk
+    else if (vel >= 4) targetWeeks = 6; // Medium: 6wk
+    else targetWeeks = 4; // Slow: 4wk
+
+    let qty = Math.ceil((vel * targetWeeks) / upc);
+    let coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+
+    // Enforce 10wk cap
+    while (coverWeeks > 10.5 && qty > 1) {
+      qty--;
+      coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+    }
+    // Minimum 1 case
+    if (qty < 1) qty = 1;
+    coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+
+    const totalInc = Math.round(cp * qty * 1.2 * 100) / 100;
+    const totalUnits = qty * upc;
+
+    decisions.push({
+      product: product_name, eposMatch: eposMatch || "", source: item.source || "",
+      casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty,
+      cover: `~${Math.round(coverWeeks)}wk`, units: totalUnits, totalInc, rrp: item.rrp || "",
+      decision: "BUY",
+      notes: `EPOS: ${epos.product} at ${epos.weeklyVel}/wk (last 7d), ${epos.monthlyAvg}/wk (monthly avg), blended ${vel}/wk. ${qty} case${qty > 1 ? "s" : ""} = ${totalUnits} units = ~${Math.round(coverWeeks)}wk cover. ${por}% POR.`,
+    });
+    totalSpend += totalInc;
+  });
+
+  // Budget rebalance — if over budget, reduce slowest movers first
+  const budgetNum = Number(budget) || 750;
+  const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
+  while (totalSpend > budgetNum * 1.05 && buyItems.length > 0) {
+    const slowest = buyItems[0];
+    if (slowest.qty > 1) {
+      slowest.qty--;
+      const upc = slowest.units / (slowest.qty + 1);
+      slowest.units = slowest.qty * upc;
+      slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
+      slowest.cover = `~${Math.round(slowest.units / slowest.vel)}wk`;
+      slowest.notes += " [Reduced for budget]";
+      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+    } else {
+      buyItems.shift(); // Can't reduce further, skip to next
+    }
+  }
+
+  // If under budget by a lot, increase fastest movers
+  const fastItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => b.vel - a.vel);
+  for (const fast of fastItems) {
+    if (totalSpend >= budgetNum * 0.95) break;
+    const upc = fast.units / fast.qty;
+    const newCover = ((fast.qty + 1) * upc) / fast.vel;
+    if (newCover <= 10) {
+      fast.qty++;
+      fast.units = fast.qty * upc;
+      fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
+      fast.cover = `~${Math.round(newCover)}wk`;
+      fast.notes += " [Increased — budget available]";
+      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+    }
+  }
+
+  // Calculate summary stats
+  const estRevenue = decisions.reduce((s, d) => {
+    const rrpNum = parseFloat((d.rrp || "").replace(/[^0-9.]/g, "")) || 0;
+    return s + (rrpNum * (d.units || 0));
+  }, 0);
+  const estProfit = Math.round((estRevenue - totalSpend) * 100) / 100;
+  const roi = totalSpend > 0 ? Math.round((estProfit / totalSpend) * 1000) / 10 : 0;
+
+  return {
+    decisions, skips,
+    totalSpend: Math.round(totalSpend * 100) / 100,
+    remaining: Math.round((budgetNum - totalSpend) * 100) / 100,
+    budgetPct: Math.round((totalSpend / budgetNum) * 1000) / 10,
+    estRevenue: Math.round(estRevenue * 100) / 100,
+    estProfit, roi,
+    lines: { buy: decisions.filter(d => d.decision === "BUY").length, test: decisions.filter(d => d.decision === "TEST").length, skip: skips.length },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI PROMPTS — image reading + product matching only
+// ═══════════════════════════════════════════════════════════════════
+function step1Prompt(supplier) {
+  return `Read this wholesale promotion leaflet from ${supplier}. Extract EVERY product shown.
+
+For each product return:
+- product_name: Full name with brand, variant, size (e.g. "Pepsi Max Original/Cherry 12x500ml PM£1.39")
+- case_format: e.g. "12x500ml", "6x4x568ml", "24x250ml", "6x2ltr"
+- case_price: The WHOLESALE CASE PRICE (ex VAT). The big price labelled WSP. NOT the retail price.
+- rrp: The retail/PM price per unit (e.g. "PM£1.39", "PM£7.99", "RRP£1.99")
+- units_per_case: Sellable units. 6x4x568ml=6 packs. 12x500ml=12. 24x250ml=24. 6x2ltr=6. 6x70cl=6. 10x100g=10.
+- deal_notes: Any special offers ("Buy 3 for £13", "Was £8.39")
+
+CRITICAL:
+- case_price is for ONE CASE not per unit. "WSP: £5.99" = £5.99 for the whole case.
+- If a product name has "/" it means BOTH varieties in one case. "Hardy's Chardonnay/Merlot" = case contains both Chardonnay AND Merlot bottles. List it as ONE product with the full name including both.
+- Read prices EXACTLY as printed. Do not calculate or infer.
+
+RESPOND with ONLY a JSON array: [{"product_name":"","case_format":"","case_price":0,"rrp":"","units_per_case":0,"deal_notes":""}]`;
+}
+
+function step2Prompt(extractedProducts, eposNames) {
+  return `Match each promotion product to the correct EPOS product name.
+
+PROMOTION PRODUCTS:
+${extractedProducts.map((p, i) => `${i + 1}. ${p.product_name} (${p.case_format}, PM/RRP: ${p.rrp})`).join("\n")}
+
+EPOS PRODUCT NAMES (from the store's till system):
+${eposNames.join("\n")}
+
+MATCHING RULES:
+1. Match by PM price code AND size. "Pepsi Max 12x500ml PM£1.39" → find EPOS with "Pm139" or "Pet 500". NOT "Pm219" (that's 2L).
+2. "Pepsi Max 6x2Ltr PM£2.19" → match "Pepsi Max Pm219"
+3. "San Miguel 6x4x568ml PM£7.99" → match "San Miguel Pm799"
+4. 568ml ≠ 440ml. Different products. Never combine.
+5. "/" means BOTH variants: "Hardy's Chardonnay/Merlot" → search for BOTH "Hardys Vr Chardonnay" AND "Hardys Vr Merlot". Return the one with higher velocity, note the other exists.
+6. If no match found, return null for epos_match.
+7. Return the EXACT EPOS name as it appears in the list above.
+
+RESPOND with ONLY a JSON array matching the same order as the promotion products:
+[{"promo_index":0,"epos_match":"exact EPOS name or null","match_notes":"why this match"}]`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UI COMPONENTS
+// ═══════════════════════════════════════════════════════════════════
 function PromoRow({ item, onEdit, priceHistory }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -25,8 +269,8 @@ function PromoRow({ item, onEdit, priceHistory }) {
       <div onClick={() => setOpen(o => !o)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: open ? "10px 10px 0 0" : 10, background: open ? decBg : C.surface, border: `1px solid ${open ? decBd : C.border}`, cursor: "pointer" }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{item.product}</div>
-          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{item.vel != null ? `${item.vel}/wk` : "—"} · {item.por != null ? `${Math.round(Number(item.por))}% POR` : "—"} · {item.source || ""}</div>
-          {item.eposMatch && <div style={{ fontSize: 10, color: C.accentLight, marginTop: 1 }}>EPOS: {item.eposMatch}</div>}
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{item.vel != null ? `${item.vel}/wk` : "—"} · {item.por != null ? `${Math.round(Number(item.por))}% POR` : "—"}</div>
+          {item.eposMatch && item.eposMatch !== "No match" && <div style={{ fontSize: 10, color: C.accentLight, marginTop: 1 }}>EPOS: {item.eposMatch}</div>}
           {chg != null && chg !== 0 && <div style={{ fontSize: 10, marginTop: 2, color: chg < 0 ? C.greenText : C.redText, fontWeight: 600 }}>{chg < 0 ? `£${Math.abs(chg).toFixed(2)} CHEAPER` : `£${chg.toFixed(2)} DEARER`} vs last promo</div>}
         </div>
         <Badge type={dec === "BUY" ? "HIGH" : dec === "TEST" ? "MED" : "LOW"}>{dec}</Badge>
@@ -34,7 +278,7 @@ function PromoRow({ item, onEdit, priceHistory }) {
       {open && (
         <div style={{ padding: "12px 14px", background: decBg, borderRadius: "0 0 10px 10px", border: `1px solid ${decBd}`, borderTop: "none" }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {[["Case £", cp ? `£${Number(cp).toFixed(2)}` : null], ["Qty", item.qty], ["Cover", item.cover], ["Units", item.units], ["Total", item.totalInc || item.total_inc ? f(Number(item.totalInc || item.total_inc)) : null], ["RRP", item.rrp]].map(([l, v]) => v ? <div key={l} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 9px" }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase" }}>{l}</div><div style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{v}</div></div> : null)}
+            {[["Case £", cp ? `£${Number(cp).toFixed(2)}` : null], ["Qty", item.qty], ["Cover", item.cover], ["Units", item.units], ["Total", item.totalInc ? f(Number(item.totalInc)) : null], ["RRP", item.rrp]].map(([l, v]) => v ? <div key={l} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 9px" }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase" }}>{l}</div><div style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{v}</div></div> : null)}
           </div>
           {item.notes && <div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.65, marginBottom: 8 }}>{item.notes}</div>}
           {item.user_notes && <div style={{ fontSize: 11, color: C.orangeText, marginBottom: 8 }}>✏️ {item.user_notes}</div>}
@@ -42,10 +286,8 @@ function PromoRow({ item, onEdit, priceHistory }) {
             <button onClick={e => { e.stopPropagation(); setEditing(true); }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✏️ Edit</button>
           ) : (
             <div style={{ background: "rgba(0,0,0,0.15)", borderRadius: 8, padding: 10, marginTop: 6 }}>
-              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                {["BUY", "TEST", "SKIP"].map(d => <button key={d} onClick={() => setNewDec(d)} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: newDec === d ? (d === "BUY" ? C.green : d === "TEST" ? "#F39C12" : C.red) : C.surface, color: newDec === d ? C.white : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{d}</button>)}
-              </div>
-              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Why? e.g. wrong product matched, don't stock this size..." style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, minHeight: 50, outline: "none", resize: "vertical", fontFamily: "Inter, sans-serif", boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{["BUY", "TEST", "SKIP"].map(d => <button key={d} onClick={() => setNewDec(d)} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: newDec === d ? (d === "BUY" ? C.green : d === "TEST" ? "#F39C12" : C.red) : C.surface, color: newDec === d ? C.white : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{d}</button>)}</div>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Why? e.g. wrong product, don't stock this size..." style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, minHeight: 50, outline: "none", resize: "vertical", fontFamily: "Inter, sans-serif", boxSizing: "border-box" }} />
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                 <button onClick={() => setEditing(false)} style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Cancel</button>
                 <button onClick={() => { if (onEdit) onEdit(item, newDec, notes); setEditing(false); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Save</button>
@@ -59,141 +301,10 @@ function PromoRow({ item, onEdit, priceHistory }) {
 }
 
 const Mini = ({ label, value, color }) => (<div style={{ flex: "1 1 45%", background: C.surface, borderRadius: 8, padding: "8px 10px", border: `1px solid ${C.border}` }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div><div style={{ fontSize: 14, fontWeight: 800, color: color || C.white }}>{value}</div></div>);
-const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
-// ─── STEP 1 PROMPT: Read the leaflet image ──────────────────────
-function step1Prompt(supplier) {
-  return `You are reading a wholesale/convenience store promotion leaflet from ${supplier}.
-
-EXTRACT every product shown on the leaflet. For EACH product, read:
-1. product_name: The full name including brand, variant, size (e.g. "Pepsi Max Original/Cherry 12x500ml PM£1.39")
-2. case_format: The case size as printed (e.g. "12x500ml", "6x4x568ml", "24x250ml", "6x2ltr")
-3. case_price: The WHOLESALE CASE PRICE (ex VAT). This is the large price shown, often labelled WSP. NOT the retail/RRP price.
-4. rrp: The retail/PM price per SELLABLE UNIT (e.g. "PM£1.39", "PM£2.19", "RRP£7.99")
-5. por: The POR% if shown on the leaflet (otherwise null)
-6. units_per_case: How many sellable units in one case:
-   - 6x4x568ml = 6 packs (sell each 4-pack)
-   - 6x4x440ml = 6 packs
-   - 12x500ml = 12 bottles
-   - 24x250ml = 24 cans
-   - 24x330ml = 24 cans
-   - 6x2ltr = 6 bottles
-   - 6x70cl or 6x75cl = 6 bottles
-   - 10x100g = 10 bars
-7. any_deal_notes: e.g. "Buy 3 for £13", "Was £8.39 Save £2.40"
-
-CRITICAL:
-- case_price is for ONE CASE, not per unit. If it says "WSP: £5.99" that means £5.99 for the whole case.
-- The PM/RRP price (e.g. PM£2.19) is what the shop SELLS each unit for — this is NOT the case price.
-- Read EXACTLY what is on the leaflet. Do not infer or calculate case prices.
-- If the leaflet shows "6x4x568ml £23.49" the case_price is 23.49 and units_per_case is 6.
-
-RESPOND with ONLY a JSON array (no markdown, no backticks):
-[{"product_name":"","case_format":"","case_price":0,"rrp":"","por":null,"units_per_case":0,"deal_notes":""}]`;
-}
-
-// ─── STEP 2 PROMPT: Match + decide ──────────────────────────────
-function step2Prompt(extractedProducts, analysis, budget, supplier, priceHist, corrections, allDays) {
-  // Calculate TRUE weekly velocity from ALL uploaded data
-  // Aggregate all days' items by barcode, then divide total qty by number of weeks of data
-  const totalDays = (allDays || []).length;
-  const totalWeeks = Math.max(1, totalDays / 7);
-  
-  // Build a map of barcode/product -> total qty across ALL days
-  const velMap = {};
-  (allDays || []).forEach(day => {
-    (day.items || []).forEach(item => {
-      const key = item.barcode || item.product;
-      if (!velMap[key]) velMap[key] = { product: item.product, category: item.category, totalQty: 0, totalGross: 0, grossMargin: item.grossMargin, hasCost: item.hasCost };
-      velMap[key].totalQty += item.qty;
-      velMap[key].totalGross += item.gross;
-      if (item.grossMargin != null) velMap[key].grossMargin = item.grossMargin;
-    });
-  });
-  
-  const epos = Object.values(velMap)
-    .filter(i => i.totalQty >= 1)
-    .sort((a, b) => b.totalQty - a.totalQty)
-    .slice(0, 250)
-    .map(i => {
-      const weeklyVel = Math.round((i.totalQty / totalWeeks) * 10) / 10;
-      const price = i.totalQty > 0 ? (i.totalGross / i.totalQty).toFixed(2) : "?";
-      const margin = i.grossMargin != null ? Math.round(i.grossMargin) + "%" : "?";
-      return `${i.product} | ${weeklyVel}/wk | £${price} | ${margin}`;
-    }).join("\n");
-
-  let prevCtx = "";
-  if (priceHist?.length) {
-    const r = {}; priceHist.forEach(h => { if (!r[h.product]) r[h.product] = h; });
-    prevCtx = `\nPREVIOUS PROMO PRICES (if this week is DEARER, SKIP):\n${Object.values(r).slice(0, 60).map(h => `${h.product}: £${h.case_price} from ${h.supplier}`).join("\n")}`;
-  }
-
-  let corrCtx = "";
-  if (corrections?.length) {
-    corrCtx = `\nUSER CORRECTIONS (learn from these):\n${corrections.slice(0, 20).map(c => `- "${c.product_pattern}": ${c.correction_value}`).join("\n")}`;
-  }
-
-  return `You are making BUY/TEST/SKIP decisions for a convenience store promotion.
-
-SUPPLIER: ${supplier}
-BUDGET: £${budget} inc VAT
-${prevCtx}${corrCtx}
-
-PRODUCTS EXTRACTED FROM LEAFLET:
-${JSON.stringify(extractedProducts, null, 1)}
-
-EPOS VELOCITY DATA — ${totalDays} days of data (${totalWeeks.toFixed(1)} weeks). Velocities are WEEKLY averages.
-Format: product name | weekly velocity | sell price | margin
-${epos}
-
-PRODUCT MATCHING — CRITICAL RULES:
-1. Match each leaflet product to EPOS data by BOTH the PM price code AND size.
-2. "Pepsi Max 12x500ml PM£1.39" → search EPOS for a product containing "Pm139" or "Pet 500" → match "Pepsi Max Pet 500Ml" or similar. Do NOT match "Pepsi Max Pm219" (that's the 2L bottle).
-3. "Pepsi Max 6x2Ltr PM£2.19" → match "Pepsi Max Pm219" (2L bottle).
-4. "San Miguel 6x4x568ml PM£7.99" → match "San Miguel Pm799" (pint cans). NOT "San Miguel" without PM.
-5. "Heineken 6x4x440ml PM£6.59" → match "Heineken Pm659". NOT Heineken pint (568ml — different product).
-6. 568ml ≠ 440ml. These are DIFFERENT products with different EPOS lines. Never combine.
-7. Different PM = different product (usually). PM£5.69 ≠ PM£5.25 for Fosters.
-8. If NO EPOS match exists for this PM+size → velocity = 0 → TEST or SKIP.
-9. Do NOT sum multiple variants to get velocity. Only use the exact matched line.
-
-VELOCITY: Use the EXACT number from the EPOS data above. Do not estimate or round creatively.
-
-POR CALCULATION:
-1. Cost per unit ex VAT = case_price / units_per_case
-2. Cost per unit inc VAT = cost ex VAT × 1.2
-3. POR = (RRP - cost inc VAT) / RRP × 100
-
-COVER CALCULATION — FOLLOW THIS EXACTLY:
-1. cover_weeks = (qty_cases × units_per_case) / weekly_velocity
-2. HARD MAXIMUM: 10 weeks. NEVER exceed this. If cover > 10wk, REDUCE qty until cover ≤ 10wk.
-3. Minimum: 3 weeks for vel ≥ 1/wk. Fast movers (10+/wk) minimum 4 weeks.
-4. cases_to_buy = CEIL(weekly_velocity × target_weeks / units_per_case)
-
-VERIFICATION — CHECK EVERY ITEM:
-For Glen's Vodka 6x1ltr at 1/wk: units_per_case=6, so 1 case = 6 bottles = 6wk cover. MAX 1 case (6wk ≤ 10wk). 2 cases = 12wk = OVER LIMIT.
-For Heineken 6x4x440ml at 1/wk: units_per_case=6, so 1 case = 6 packs = 6wk. MAX 1 case.
-For Pepsi Max 6x2ltr at 22/wk: units_per_case=6, so need CEIL(22×8/6) = 30 cases for 8wk = ~8.2wk. OK.
-For a product at 0/wk: velocity is ZERO. Decision = TEST (1 case only) or SKIP. Never BUY with qty > 1.
-
-AFTER calculating every item, VERIFY: is cover_weeks ≤ 10 for every BUY item? If not, reduce qty.
-
-TOTAL: totalInc = case_price × qty × 1.2 (add VAT)
-
-BUDGET: Spend 97%+ of £${budget}. Rebalance: if under-spent, increase fast movers first (within 10wk cap). If over-spent, reduce slowest items first.
-
-SKIP RULES:
-- Zero velocity + no EPOS match → SKIP (unless interesting TEST candidate)
-- Dearer than previous promo price → SKIP
-- 20cl spirit miniatures → SKIP (we only sell 70cl+)
-- San Miguel 440ml → SKIP (we only sell 568ml pint cans)
-- Dead products (0 yearly sales) → SKIP
-
-RESPOND with ONLY JSON (no markdown, no backticks):
-{"source":"${supplier}","promoDates":"","budget":${budget},"totalSpend":0,"remaining":0,"budgetPct":0,"estRevenue":0,"estProfit":0,"roi":0,"lines":{"buy":0,"test":0,"skip":0},"keyInsight":"","decisions":[{"product":"full name with size from leaflet","eposMatch":"exact EPOS product name matched","source":"${supplier}","casePrice":0,"por":0,"vel":0,"qty":0,"cover":"~Xwk","units":0,"totalInc":0,"rrp":"PM£X.XX","decision":"BUY","notes":"matching reasoning + why buy/test/skip"}],"skips":[{"product":"","reason":""}]}`;
-}
-
-// ─── MAIN COMPONENT ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════
 export default function LeafletScanner({ analysis, clientId, allDays }) {
   const [view, setView] = useState("menu");
   const [photos, setPhotos] = useState([]); const [previews, setPreviews] = useState([]);
@@ -205,9 +316,12 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
   const [selScan, setSelScan] = useState(null); const [selDecs, setSelDecs] = useState([]); const [selSkips, setSelSkips] = useState([]);
   const [saving, setSaving] = useState(false);
 
+  // Pre-calculate velocity map from all uploaded data
+  const velMap = useMemo(() => buildVelocityMap(allDays), [allDays]);
+  const eposNames = useMemo(() => Object.values(velMap).map(v => v.product).sort(), [velMap]);
+
   useEffect(() => { if (!clientId) return; (async () => { try { const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]); setHistory(s || []); setPriceHist(p || []); } catch (e) { console.error(e); } })(); }, [clientId]);
 
-  // Weekly scan count
   const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
   const scansThisWeek = history.filter(s => new Date(s.created_at) >= weekStart).length;
   const canScan = scansThisWeek < MAX_SCANS_PER_WEEK;
@@ -215,74 +329,76 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
   const addPhotos = (e) => { const files = Array.from(e.target.files || []); setPhotos(p => [...p, ...files]); files.forEach(f => { const r = new FileReader(); r.onload = ev => setPreviews(p => [...p, ev.target.result]); r.readAsDataURL(f); }); };
   const rmPhoto = i => { setPhotos(p => p.filter((_, j) => j !== i)); setPreviews(p => p.filter((_, j) => j !== i)); };
 
-  // ─── TWO-STEP SCAN ────────────────────────────────────────────
+  // ─── THREE-STEP SCAN ──────────────────────────────────────────
   const scan = async () => {
     if (!photos.length || !ANTHROPIC_KEY || !supplier.trim()) return;
-    if (!canScan) { setError(`Weekly limit reached (${MAX_SCANS_PER_WEEK} scans per week). Try again next week.`); return; }
+    if (!canScan) { setError(`Weekly limit (${MAX_SCANS_PER_WEEK}) reached.`); return; }
     setScanning(true); setError(null); setResult(null);
 
     try {
-      // Convert photos to base64
       const imgs = await Promise.all(photos.map(file => new Promise(res => {
         const r = new FileReader();
         r.onload = () => res({ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: r.result.split(",")[1] } });
         r.readAsDataURL(file);
       })));
 
-      // ── STEP 1: Read the leaflet ──
-      setScanStep("Step 1/2: Reading leaflet...");
-      const s1res = await fetch("https://api.anthropic.com/v1/messages", {
+      // ── STEP 1: Read leaflet image ──
+      setScanStep("Step 1/3: Reading leaflet...");
+      const s1 = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 3000, messages: [{ role: "user", content: [...imgs, { type: "text", text: step1Prompt(supplier) }] }] }),
       });
-      if (!s1res.ok) throw new Error(`Step 1 API error: ${s1res.status}`);
-      const s1data = await s1res.json();
-      let s1text = (s1data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
-      const s1js = s1text.indexOf("["); const s1je = s1text.lastIndexOf("]");
-      if (s1js >= 0 && s1je > s1js) s1text = s1text.slice(s1js, s1je + 1);
-      
-      let extracted;
-      try { extracted = JSON.parse(s1text); }
-      catch { throw new Error("Could not read leaflet products. Try a clearer photo."); }
-      
-      if (!Array.isArray(extracted) || extracted.length === 0) throw new Error("No products found on leaflet. Try a clearer photo.");
+      if (!s1.ok) throw new Error(`Step 1 failed: ${s1.status}`);
+      let s1text = ((await s1.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      const j1s = s1text.indexOf("["); const j1e = s1text.lastIndexOf("]");
+      if (j1s >= 0) s1text = s1text.slice(j1s, j1e + 1);
+      const extracted = JSON.parse(s1text);
+      if (!Array.isArray(extracted) || !extracted.length) throw new Error("No products found. Try a clearer photo.");
 
-      // ── STEP 2: Match + decide ──
-      setScanStep(`Step 2/2: Matching ${extracted.length} products to your sales data...`);
-      const s2prompt = step2Prompt(extracted, analysis, parseInt(budget) || 750, supplier, priceHist, corrections, allDays);
-      const s2res = await fetch("https://api.anthropic.com/v1/messages", {
+      // ── STEP 2: Match products to EPOS ──
+      setScanStep(`Step 2/3: Matching ${extracted.length} products to EPOS...`);
+      const s2 = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: s2prompt }] }),
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: step2Prompt(extracted, eposNames) }] }),
       });
-      if (!s2res.ok) throw new Error(`Step 2 API error: ${s2res.status}`);
-      const s2data = await s2res.json();
-      let s2text = (s2data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
-      const s2js = s2text.indexOf("{"); const s2je = s2text.lastIndexOf("}");
-      if (s2js >= 0 && s2je > s2js) s2text = s2text.slice(s2js, s2je + 1);
+      if (!s2.ok) throw new Error(`Step 2 failed: ${s2.status}`);
+      let s2text = ((await s2.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      const j2s = s2text.indexOf("["); const j2e = s2text.lastIndexOf("]");
+      if (j2s >= 0) s2text = s2text.slice(j2s, j2e + 1);
+      const matches = JSON.parse(s2text);
 
-      try {
-        const parsed = JSON.parse(s2text);
-        setResult(parsed);
-        setView("results");
-      } catch {
-        // Retry step 2 with explicit JSON instruction
-        try {
-          const r2 = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST", headers: AI_HDR,
-            body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [
-              { role: "user", content: s2prompt },
-              { role: "assistant", content: s2text },
-              { role: "user", content: "Invalid JSON. Respond with ONLY a JSON object starting with { and ending with }." },
-            ] }),
-          });
-          const r2d = await r2.json();
-          let r2t = (r2d.content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
-          const r2s = r2t.indexOf("{"); const r2e = r2t.lastIndexOf("}");
-          if (r2s >= 0) r2t = r2t.slice(r2s, r2e + 1);
-          setResult(JSON.parse(r2t)); setView("results");
-        } catch { setError("Could not generate decisions. Try with fewer photos."); }
-      }
-    } catch (e) { console.error("Scan:", e); setError(e.message || "Scan failed"); }
+      // ── STEP 3: JavaScript calculates everything ──
+      setScanStep("Step 3/3: Calculating decisions...");
+      const matchedProducts = extracted.map((prod, i) => {
+        const match = matches.find(m => m.promo_index === i) || matches[i] || {};
+        const eposName = match.epos_match;
+        // Find in velocity map
+        let epos = null;
+        if (eposName) {
+          epos = findEposMatch(prod.product_name, eposName, velMap);
+        }
+        // Parse RRP number
+        const rrpNum = parseFloat((prod.rrp || "").replace(/[^0-9.]/g, "")) || 0;
+
+        return {
+          ...prod, rrp_num: rrpNum,
+          epos, eposMatch: epos ? epos.product : (eposName || "No match"),
+          source: supplier,
+        };
+      });
+
+      const result = calculateDecisions(matchedProducts, budget);
+      result.source = supplier;
+      result.promoDates = extracted[0]?.deal_notes || "";
+      result.budget = parseInt(budget) || 750;
+      result.keyInsight = `${result.lines.buy} products to buy, ${result.lines.test} to test from ${supplier}. ${result.totalSpend > 0 ? `Total spend £${result.totalSpend} (${result.budgetPct}% of budget).` : ""}`;
+
+      setResult(result);
+      setView("results");
+    } catch (e) {
+      console.error("Scan:", e);
+      setError(e.message || "Scan failed. Try a clearer photo.");
+    }
     setScanning(false); setScanStep("");
   };
 
@@ -314,15 +430,12 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
   if (view === "menu") return (
     <SectionCard title="Promotions" icon="🎯" accent="rgba(34,197,94,0.06)">
       {!ANTHROPIC_KEY ? <EmptyState msg="API key required in Vercel settings" /> : <>
-        <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>Upload supplier leaflet photos. AI reads every product, matches to your EPOS by PM code + size, and recommends BUY/TEST/SKIP.</div>
-        
+        <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>Upload supplier leaflet photos. AI reads every product and matches to your EPOS. All calculations done locally — velocity, cover, POR, budget are always accurate.</div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <span style={{ fontSize: 11, color: C.textMuted }}>Scans this week: {scansThisWeek}/{MAX_SCANS_PER_WEEK}</span>
           {!canScan && <Badge type="LOW">LIMIT REACHED</Badge>}
         </div>
-
-        <button onClick={() => canScan ? setView("scan") : setError("Weekly scan limit reached")} disabled={!canScan} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: canScan ? C.green : C.surface, color: canScan ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16, opacity: canScan ? 1 : 0.5 }}>📷 Scan New Leaflet</button>
-
+        <button onClick={() => canScan ? setView("scan") : null} disabled={!canScan} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: canScan ? C.green : C.surface, color: canScan ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16, opacity: canScan ? 1 : 0.5 }}>📷 Scan New Leaflet</button>
         {history.length > 0 && <>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Previous Scans</div>
           {history.map((s, i) => <div key={i} onClick={() => viewHist(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}><div><div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{s.supplier}</div><div style={{ fontSize: 10, color: C.textMuted }}>{new Date(s.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {s.buy_count}B/{s.test_count}T · {fi(s.total_spend)}</div></div><span style={{ color: C.textMuted }}>›</span></div>)}
@@ -335,31 +448,26 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
   if (view === "scan") return (
     <SectionCard title="Scan Leaflet" icon="📷">
       <button onClick={() => { setView("menu"); setPhotos([]); setPreviews([]); setError(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
-
       <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>Supplier Name</div>
-      <input type="text" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="e.g. Booker 1-Day Special, Parfetts Mega Mondays..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 6 }} />
+      <input type="text" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="e.g. Booker 1-Day Special, Parfetts..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 6 }} />
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
         {QUICK_SUPPLIERS.map(s => <button key={s} onClick={() => setSupplier(s)} style={{ padding: "6px 10px", borderRadius: 8, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", background: supplier === s ? C.accentLight : C.surface, color: supplier === s ? C.white : C.textMuted }}>{s}</button>)}
       </div>
-
       <label style={{ display: "block", padding: "24px 16px", borderRadius: 12, border: `2px dashed ${C.border}`, background: C.surface, textAlign: "center", cursor: "pointer", marginBottom: 12 }}>
         <input type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
         <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Take photo or choose from library</div>
       </label>
       {previews.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>{previews.map((p, i) => <div key={i} style={{ position: "relative", width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}><img src={p} style={{ width: "100%", height: "100%", objectFit: "cover" }} /><button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>)}</div>}
-
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Budget:</span>
         <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}><span style={{ color: C.textMuted }}>£</span><input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} /></div>
       </div>
-
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>📊 {Object.keys(velMap).length} products in EPOS · {(allDays || []).length} days of data</div>
       {error && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.redDim, marginBottom: 12, fontSize: 12, color: C.redText }}>{error}</div>}
-
       <button onClick={scan} disabled={scanning || !photos.length || !supplier.trim()} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: photos.length && supplier.trim() ? C.green : C.surface, color: photos.length && supplier.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", opacity: scanning ? 0.7 : 1 }}>
-        {scanning ? "🔍 " + scanStep : photos.length && supplier.trim() ? `🎯 Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}` : !supplier.trim() ? "Enter supplier name" : "Upload a photo"}
+        {scanning ? `🔍 ${scanStep}` : photos.length && supplier.trim() ? `🎯 Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}` : !supplier.trim() ? "Enter supplier name" : "Upload a photo"}
       </button>
-      {scanning && <div style={{ textAlign: "center", padding: 12, fontSize: 12, color: C.textMuted }}>{scanStep}</div>}
     </SectionCard>
   );
 
@@ -371,11 +479,11 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
     return (<>
       <SectionCard title="Promotion Forensic" icon="🎯" accent="rgba(34,197,94,0.06)">
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><Mini label="Budget" value={fi(result.budget || budget)} /><Mini label="Spent" value={fi(result.totalSpend || 0)} color={C.white} /><Mini label="ROI" value={`${result.roi || 0}%`} color={C.greenText} /><Mini label="Lines" value={`${b.length}B / ${t.length}T`} /></div>
-        {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}{result.promoDates ? ` — ${result.promoDates}` : ""}</div>}
-        {result.keyInsight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14 }}><div style={{ fontSize: 10, color: C.accentLight, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Key Insight</div><div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{result.keyInsight}</div></div>}
+        {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
+        {result.keyInsight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14 }}><div style={{ fontSize: 10, color: C.accentLight, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Summary</div><div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{result.keyInsight}</div></div>}
         {b.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, textTransform: "uppercase", marginBottom: 8 }}>✅ Buy ({b.length})</div>{b.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
         {t.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🔶 Test ({t.length})</div>{t.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
-        {result.totalSpend > 0 && <div style={{ marginTop: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 4 }}><span>Budget</span><span>{result.budgetPct || Math.round((result.totalSpend / (parseInt(budget) || 750)) * 100)}%</span></div><div style={{ height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, result.budgetPct || 0)}%`, background: C.green, borderRadius: 3 }} /></div></div>}
+        {result.totalSpend > 0 && <div style={{ marginTop: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 4 }}><span>Budget</span><span>{result.budgetPct}%</span></div><div style={{ height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, result.budgetPct)}%`, background: C.green, borderRadius: 3 }} /></div><div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>{f(result.remaining)} remaining</div></div>}
       </SectionCard>
       {sk.length > 0 && <SectionCard title="Skipped" icon="🚫">{sk.map((s, i) => <div key={i} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim }}><div style={{ fontSize: 11, color: C.white }}>{s.product}</div><div style={{ fontSize: 10, color: C.textMuted }}>{s.reason}</div></div>)}</SectionCard>}
       <div style={{ padding: "0 16px 20px", display: "flex", gap: 8 }}>
