@@ -93,10 +93,34 @@ RESPOND with ONLY a JSON array (no markdown, no backticks):
 }
 
 // ─── STEP 2 PROMPT: Match + decide ──────────────────────────────
-function step2Prompt(extractedProducts, analysis, budget, supplier, priceHist, corrections) {
-  // Build EPOS velocity data
-  const epos = (analysis?.items || []).filter(i => i.qty >= 1).sort((a, b) => b.qty - a.qty).slice(0, 250)
-    .map(i => `${i.product} | ${i.qty}/wk | £${i.qty > 0 ? (i.gross / i.qty).toFixed(2) : "?"} | ${i.grossMargin != null ? Math.round(i.grossMargin) + "%" : "?"}`).join("\n");
+function step2Prompt(extractedProducts, analysis, budget, supplier, priceHist, corrections, allDays) {
+  // Calculate TRUE weekly velocity from ALL uploaded data
+  // Aggregate all days' items by barcode, then divide total qty by number of weeks of data
+  const totalDays = (allDays || []).length;
+  const totalWeeks = Math.max(1, totalDays / 7);
+  
+  // Build a map of barcode/product -> total qty across ALL days
+  const velMap = {};
+  (allDays || []).forEach(day => {
+    (day.items || []).forEach(item => {
+      const key = item.barcode || item.product;
+      if (!velMap[key]) velMap[key] = { product: item.product, category: item.category, totalQty: 0, totalGross: 0, grossMargin: item.grossMargin, hasCost: item.hasCost };
+      velMap[key].totalQty += item.qty;
+      velMap[key].totalGross += item.gross;
+      if (item.grossMargin != null) velMap[key].grossMargin = item.grossMargin;
+    });
+  });
+  
+  const epos = Object.values(velMap)
+    .filter(i => i.totalQty >= 1)
+    .sort((a, b) => b.totalQty - a.totalQty)
+    .slice(0, 250)
+    .map(i => {
+      const weeklyVel = Math.round((i.totalQty / totalWeeks) * 10) / 10;
+      const price = i.totalQty > 0 ? (i.totalGross / i.totalQty).toFixed(2) : "?";
+      const margin = i.grossMargin != null ? Math.round(i.grossMargin) + "%" : "?";
+      return `${i.product} | ${weeklyVel}/wk | £${price} | ${margin}`;
+    }).join("\n");
 
   let prevCtx = "";
   if (priceHist?.length) {
@@ -118,7 +142,8 @@ ${prevCtx}${corrCtx}
 PRODUCTS EXTRACTED FROM LEAFLET:
 ${JSON.stringify(extractedProducts, null, 1)}
 
-EPOS VELOCITY DATA (product name | velocity/wk | sell price | margin):
+EPOS VELOCITY DATA — ${totalDays} days of data (${totalWeeks.toFixed(1)} weeks). Velocities are WEEKLY averages.
+Format: product name | weekly velocity | sell price | margin
 ${epos}
 
 PRODUCT MATCHING — CRITICAL RULES:
@@ -139,12 +164,19 @@ POR CALCULATION:
 2. Cost per unit inc VAT = cost ex VAT × 1.2
 3. POR = (RRP - cost inc VAT) / RRP × 100
 
-COVER: cases needed = CEIL(velocity × target_weeks / units_per_case)
-- Fast (10+/wk): 6-10wk cover, min 4wk
-- Medium (4-9/wk): 4-8wk cover
-- Slow (1-3/wk): 3-6wk cover
-- Max 10 weeks absolute cap
-- No history: TEST = 1 case
+COVER CALCULATION — FOLLOW THIS EXACTLY:
+1. cover_weeks = (qty_cases × units_per_case) / weekly_velocity
+2. HARD MAXIMUM: 10 weeks. NEVER exceed this. If cover > 10wk, REDUCE qty until cover ≤ 10wk.
+3. Minimum: 3 weeks for vel ≥ 1/wk. Fast movers (10+/wk) minimum 4 weeks.
+4. cases_to_buy = CEIL(weekly_velocity × target_weeks / units_per_case)
+
+VERIFICATION — CHECK EVERY ITEM:
+For Glen's Vodka 6x1ltr at 1/wk: units_per_case=6, so 1 case = 6 bottles = 6wk cover. MAX 1 case (6wk ≤ 10wk). 2 cases = 12wk = OVER LIMIT.
+For Heineken 6x4x440ml at 1/wk: units_per_case=6, so 1 case = 6 packs = 6wk. MAX 1 case.
+For Pepsi Max 6x2ltr at 22/wk: units_per_case=6, so need CEIL(22×8/6) = 30 cases for 8wk = ~8.2wk. OK.
+For a product at 0/wk: velocity is ZERO. Decision = TEST (1 case only) or SKIP. Never BUY with qty > 1.
+
+AFTER calculating every item, VERIFY: is cover_weeks ≤ 10 for every BUY item? If not, reduce qty.
 
 TOTAL: totalInc = case_price × qty × 1.2 (add VAT)
 
@@ -162,7 +194,7 @@ RESPOND with ONLY JSON (no markdown, no backticks):
 }
 
 // ─── MAIN COMPONENT ─────────────────────────────────────────────
-export default function LeafletScanner({ analysis, clientId }) {
+export default function LeafletScanner({ analysis, clientId, allDays }) {
   const [view, setView] = useState("menu");
   const [photos, setPhotos] = useState([]); const [previews, setPreviews] = useState([]);
   const [budget, setBudget] = useState("750"); const [supplier, setSupplier] = useState("");
@@ -217,7 +249,7 @@ export default function LeafletScanner({ analysis, clientId }) {
 
       // ── STEP 2: Match + decide ──
       setScanStep(`Step 2/2: Matching ${extracted.length} products to your sales data...`);
-      const s2prompt = step2Prompt(extracted, analysis, parseInt(budget) || 750, supplier, priceHist, corrections);
+      const s2prompt = step2Prompt(extracted, analysis, parseInt(budget) || 750, supplier, priceHist, corrections, allDays);
       const s2res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: s2prompt }] }),
