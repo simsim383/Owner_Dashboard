@@ -153,14 +153,41 @@ function matchPromoToEpos(promoName, promoRrp, velMap) {
 // ═══════════════════════════════════════════════════════════════════
 // PACK STRUCTURE VALIDATOR
 // ═══════════════════════════════════════════════════════════════════
-function parseUnitsPerCase(caseFormat, aiValue) {
-  if (!caseFormat) return aiValue || 1;
-  const multiPack = caseFormat.match(/^(\d+)x(\d+)x/i);
-  if (multiPack) return parseInt(multiPack[1]);
-  const single = caseFormat.match(/^(\d+)x/i);
-  if (single) return parseInt(single[1]);
-  if (/^\d*x?[\d.]+(cl|ml|ltr)/i.test(caseFormat) && !caseFormat.includes("x")) return 1;
-  return aiValue || 1;
+function parseUnitsPerCase(caseFormat, aiValue, productName) {
+  // Helper: extract units from a format string like "24x440ml", "6x4x568ml", "6x2ltr"
+  const extractFromString = (str) => {
+    if (!str) return null;
+    const s = str.trim();
+    // "6x4x568ml" → 6 sellable packs (outer number is packs, inner is cans per pack)
+    const multi = s.match(/^(\d+)x(\d+)x/i);
+    if (multi) return parseInt(multi[1]);
+    // "24x440ml", "12x500ml", "6x75cl", "6x2ltr" → first number = individual units
+    const single = s.match(/^(\d+)x/i);
+    if (single) return parseInt(single[1]);
+    // "70cl", "1ltr" with no multiplier → single bottle
+    if (/^[\d.]+(cl|ml|ltr)/i.test(s)) return 1;
+    return null;
+  };
+
+  // 1. Try case_format first (most reliable when present)
+  const fromFormat = extractFromString(caseFormat);
+  if (fromFormat !== null) return fromFormat;
+
+  // 2. Try extracting format from product_name
+  // e.g. "K Cider 24x440ml RRP1.99" → find "24x440ml" in the name
+  if (productName) {
+    const formatInName = (productName || "").match(/(\d+x\d+x[\d.]+(?:ml|cl|ltr)|\d+x[\d.]+(?:ml|cl|ltr))/i);
+    if (formatInName) {
+      const fromName = extractFromString(formatInName[1]);
+      if (fromName !== null) return fromName;
+    }
+  }
+
+  // 3. Fall back to AI-provided value, sanity-capped at 1-48
+  const ai = Number(aiValue) || 1;
+  if (ai >= 1 && ai <= 48) return ai;
+
+  return 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -178,7 +205,7 @@ function calculateDecisions(matchedProducts, budget) {
     const { product_name, case_price, case_format, rrp_num, epos, eposMatch } = item;
     const vel = epos ? epos.blended : 0;
     const cp  = Number(case_price) || 0;
-    const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1);
+    const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1, product_name);
     const rrp = Number(rrp_num) || 0;
 
     const costPerUnitIncVat = (upc > 0 ? cp / upc : cp) * 1.2;
@@ -285,16 +312,26 @@ function step1Prompt(supplier) {
 
 For each product return:
 - product_name: Full name including brand, variant and size. e.g. "Smirnoff Ice 12x275ml PM2.29", "Dr Pepper Cherry 12x500ml PM1.40", "Pepsi Max 12x500ml PM1.39"
-- case_format: e.g. "12x500ml", "6x4x568ml", "24x250ml", "6x2ltr", "6x70cl"
+- case_format: The FULL pack format EXACTLY as printed. e.g. "24x440ml", "12x500ml", "6x4x568ml", "6x2ltr", "6x70cl". This is CRITICAL — always include it.
 - case_price: The WHOLESALE CASE PRICE in pounds (ex VAT). The big price shown (WSP). NOT the retail price.
 - rrp: The retail or PM price per unit e.g. "PM1.40", "PM7.99", "RRP1.99"
-- units_per_case: Number of sellable units. 6x4x568ml=6 packs. 12x500ml=12. 24x250ml=24. 6x2ltr=6. 6x70cl=6.
+- units_per_case: Sellable units per case. READ FROM case_format:
+    24x440ml = 24 cans (24 units)
+    12x500ml = 12 bottles (12 units)
+    6x4x568ml = 6 four-packs (6 units, each pack sells at the PM price)
+    6x4x440ml = 6 four-packs (6 units)
+    6x2ltr = 6 bottles (6 units)
+    6x70cl = 6 bottles (6 units)
+    6x75cl = 6 bottles (6 units)
+    6x1ltr = 6 bottles (6 units)
 - deal_notes: Any special offers shown
 
 CRITICAL RULES:
-- product_name MUST include the FULL variant. "Smirnoff Ice" not "Smirnoff". "Dr Pepper Cherry" not "Dr Pepper".
+- product_name MUST include the FULL variant. "Smirnoff Ice" not "Smirnoff". "Dr Pepper Cherry" not "Dr Pepper". "K Cider" not "Cider".
+- case_format MUST always be filled in. Never leave it blank. Read it from the product description (e.g. "24x440ml", "6x4x440ml").
 - case_price is for ONE CASE. "WSP 19.49" means 19.49 for the whole case, not per unit.
-- A slash "/" in a name means a mixed case e.g. "Chardonnay/Merlot" = one case containing both. Keep as one product.
+- units_per_case MUST match the case_format. "24x440ml" = 24 units. "6x4x440ml" = 6 units (packs). Never put 1 unless it is genuinely a single bottle.
+- A slash "/" in a name means a mixed case e.g. "Chardonnay/Merlot" = one case with both. Keep as one product.
 - Read ALL prices exactly as printed.
 
 RESPOND with ONLY a valid JSON array, nothing else:
