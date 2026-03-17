@@ -323,7 +323,7 @@ STRICT MATCHING RULES:
 6. If NO EPOS name matches the brand + format, return null. Do NOT pick the nearest unrelated product.
 7. Return the EXACT EPOS name string from the list above, spelled exactly as shown.
 8. SPIRITS: If the promo shows a single bottle (e.g. "Smirnoff 70cl £14.99") with no case format multiplier, units_per_case = 1. Do not assume a case of 6.
-9. PM CHANGES: If the promo PM price differs from ALL EPOS PM codes for that brand+size (e.g. promo says PM£2.80 but EPOS only has Pm265), return null — do not guess it's the same product.
+9. PM MATCHING: If the promo PM price (e.g. PM£6.59) converts to a code (Pm659) that EXISTS in the EPOS list, that IS a valid match — return it. Only return null if the PM code genuinely does not appear in ANY EPOS name for that brand. Example: promo "Heineken PM£6.59" → look for "Pm659" in EPOS → found "Heineken Pm659" → MATCH.
 10. NEVER sum multiple EPOS variants to create a combined velocity. "Pepsi Max Pm139" and "Pepsi Max Pm219" are DIFFERENT products. Match to ONE specific EPOS line only.
 11. "/" in product names (e.g. "Chardonnay/Merlot") means one MIXED CASE containing both. Match to the PRIMARY variant (first named) in EPOS. Note if secondary variant exists separately.
 
@@ -470,54 +470,19 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
           }
         }
         
-        // JS FALLBACK: if AI returned null, try matching by brand + PM code from the leaflet
+        // JS FALLBACK: ONLY Strategy A (brand + PM code) — strict, no fuzzy matching
         if (!epos) {
-          const promoName = (prod.product_name || "").toLowerCase();
           const promoRrp = (prod.rrp || "").replace(/[^0-9.]/g, "");
-          const pmCode = promoRrp ? promoRrp.replace(".", "") : "";
-          const brand = promoName.replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
-          
-          // Strategy A: brand + PM code in EPOS name (e.g. "Heineken Pm659")
-          if (brand && pmCode) {
+          const pmCode = promoRrp.replace(".", "");
+          const brand = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+
+          if (brand && pmCode && pmCode.length >= 2) {
             for (const v of Object.values(velMap)) {
               const ep = v.product.toLowerCase();
-              if (ep.includes(brand) && (ep.includes(`pm${pmCode}`) || ep.includes(`pm${promoRrp}`))) {
+              if (ep.startsWith(brand) && ep.includes(`pm${pmCode}`)) {
                 epos = v;
                 break;
               }
-            }
-          }
-          
-          // Strategy B: brand + sell price match (gross÷qty ≈ leaflet RRP)
-          if (!epos && brand && promoRrp) {
-            const leafletPrice = parseFloat(promoRrp);
-            if (leafletPrice > 0) {
-              let bestMatch = null;
-              let bestDiff = 0.10; // tolerance: within 10p
-              for (const v of Object.values(velMap)) {
-                const ep = v.product.toLowerCase();
-                if (!ep.includes(brand)) continue;
-                // Calculate implied sell price from EPOS data
-                const impliedPrice = v.sellPrice;
-                if (impliedPrice > 0) {
-                  const diff = Math.abs(impliedPrice - leafletPrice);
-                  if (diff < bestDiff) {
-                    bestDiff = diff;
-                    bestMatch = v;
-                  }
-                }
-              }
-              if (bestMatch) epos = bestMatch;
-            }
-          }
-          
-          // Strategy C: brand + keyword matching (fallback for generic names)
-          if (!epos && brand) {
-            const promoWords = promoName.split(/[\s\/]+/).filter(w => w.length > 2);
-            for (const v of Object.values(velMap)) {
-              const ep = v.product.toLowerCase();
-              const matchCount = promoWords.filter(w => ep.includes(w)).length;
-              if (matchCount >= 2) { epos = v; break; }
             }
           }
         }
