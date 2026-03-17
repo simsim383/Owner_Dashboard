@@ -10,54 +10,68 @@ const MAX_SCANS_PER_WEEK = 5;
 const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
 // ═══════════════════════════════════════════════════════════════════
-// VELOCITY ENGINE — calculates blended weekly velocity from EPOS data
+// VELOCITY ENGINE — 3-window blend with one-off detection
 // ═══════════════════════════════════════════════════════════════════
 function buildVelocityMap(allDays) {
   if (!allDays || !allDays.length) return {};
-  // Sort days by date
   const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
-  const totalDays = sorted.length;
 
-  // Last 7 days
-  const last7 = sorted.slice(-Math.min(7, totalDays));
-  // Last 28 days (monthly)
-  const last28 = sorted.slice(-Math.min(28, totalDays));
-  const monthWeeks = Math.max(1, last28.length / 7);
+  const last7 = sorted.slice(-7);
+  const last28 = sorted.slice(-28);
+  const allTime = sorted;
 
-  // Aggregate by product for each period
   const agg = (days) => {
     const map = {};
     days.forEach(d => d.items.forEach(i => {
       const key = (i.barcode || i.product).toLowerCase();
-      if (!map[key]) map[key] = { product: i.product, barcode: i.barcode, category: i.category, qty: 0, gross: 0, grossMargin: i.grossMargin, hasCost: i.hasCost };
+      if (!map[key]) map[key] = { product: i.product, barcode: i.barcode, category: i.category, qty: 0, gross: 0 };
       map[key].qty += i.qty;
       map[key].gross += i.gross;
-      if (i.grossMargin != null) map[key].grossMargin = i.grossMargin;
     }));
     return map;
   };
 
   const weekMap = agg(last7);
   const monthMap = agg(last28);
+  const yearMap = agg(allTime);
 
-  // Build blended velocity map
+  const allKeys = new Set([...Object.keys(weekMap), ...Object.keys(monthMap), ...Object.keys(yearMap)]);
   const result = {};
-  const allKeys = new Set([...Object.keys(weekMap), ...Object.keys(monthMap)]);
 
   allKeys.forEach(key => {
     const w = weekMap[key];
     const m = monthMap[key];
-    const product = (w || m).product;
-    const weeklyVel = w ? w.qty : 0; // Actual units sold in last 7 days
-    const monthlyAvg = m ? Math.round((m.qty / monthWeeks) * 10) / 10 : 0; // Monthly weekly average
-    // Blended: 70% recent (last 7 days), 30% monthly average
-    const blended = Math.round(((0.7 * weeklyVel) + (0.3 * monthlyAvg)) * 10) / 10;
-    const sellPrice = (m || w).qty > 0 ? Math.round(((m || w).gross / (m || w).qty) * 100) / 100 : 0;
+    const y = yearMap[key];
+
+    const weeklyVel = w ? w.qty : 0;
+    const monthlyAvg = m ? Math.round((m.qty / Math.max(1, last28.length / 7)) * 10) / 10 : 0;
+    const yearlyAvg = y ? Math.round((y.qty / Math.max(1, allTime.length / 7)) * 10) / 10 : 0;
+
+    // ONE-OFF DETECTION: high last week but near-zero all-time = one-off purchase
+    const isOneOff = weeklyVel >= 3 && yearlyAvg < 0.5;
+
+    let blended;
+    if (isOneOff) {
+      blended = 0;
+    } else if (weeklyVel > yearlyAvg * 2) {
+      // Growing — weight recent higher
+      blended = Math.round(((weeklyVel * 0.5) + (monthlyAvg * 0.3) + (yearlyAvg * 0.2)) * 10) / 10;
+    } else if (weeklyVel < yearlyAvg * 0.5) {
+      // Seasonal dip — trust yearly more
+      blended = Math.round(((weeklyVel * 0.2) + (monthlyAvg * 0.3) + (yearlyAvg * 0.5)) * 10) / 10;
+    } else {
+      // Stable — balanced weight
+      blended = Math.round(((weeklyVel * 0.4) + (monthlyAvg * 0.35) + (yearlyAvg * 0.25)) * 10) / 10;
+    }
+
+    const base = w || m || y;
+    const totalQty = (m || y)?.qty || 1;
+    const totalGross = (m || y)?.gross || 0;
+    const sellPrice = Math.round((totalGross / totalQty) * 100) / 100;
 
     result[key] = {
-      product, barcode: (w || m).barcode, category: (w || m).category,
-      weeklyVel, monthlyAvg, blended,
-      sellPrice, grossMargin: (w || m).grossMargin, hasCost: (w || m).hasCost,
+      product: base.product, barcode: base.barcode, category: base.category,
+      weeklyVel, monthlyAvg, yearlyAvg, blended, isOneOff, sellPrice,
     };
   });
   return result;
@@ -105,103 +119,145 @@ function findEposMatch(leafletProduct, eposMatch, velMap) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// DECISION ENGINE — calculates POR, cover, qty, decision
+// PACK STRUCTURE VALIDATOR — overrides AI's units_per_case (Fix 3)
+// ═══════════════════════════════════════════════════════════════════
+function parseUnitsPerCase(caseFormat, aiValue) {
+  if (!caseFormat) return aiValue || 1;
+  // "6x4x568ml" or "6x4x440ml" → 6 sellable packs (outer number only)
+  const multiPack = caseFormat.match(/^(\d+)x(\d+)x/i);
+  if (multiPack) return parseInt(multiPack[1]);
+  // "12x500ml", "24x250ml", "6x75cl" → first number = individual units
+  const single = caseFormat.match(/^(\d+)x/i);
+  if (single) return parseInt(single[1]);
+  // "1x70cl" or just "70cl" = single bottle (spirits)
+  if (/^\d*x?[\d.]+(cl|ml)/i.test(caseFormat) && !caseFormat.includes('x')) return 1;
+  return aiValue || 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DECISION ENGINE — correct thresholds, cover rules, one-off guard
 // ═══════════════════════════════════════════════════════════════════
 function calculateDecisions(matchedProducts, budget) {
   const decisions = [];
   const skips = [];
   let totalSpend = 0;
+  const COVER_MIN = 3;
+  const COVER_MAX = 10;
+  const FAST_VEL = 10;
 
-  // First pass — calculate everything
   matchedProducts.forEach(item => {
-    const { product_name, case_price, rrp_num, units_per_case, epos, eposMatch } = item;
+    const { product_name, case_price, case_format, rrp_num, epos, eposMatch } = item;
     const vel = epos ? epos.blended : 0;
     const cp = Number(case_price) || 0;
-    const upc = Number(units_per_case) || 1;
+    const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1);
     const rrp = Number(rrp_num) || 0;
 
     // POR calculation
-    const costPerUnitExVat = cp / upc;
+    const costPerUnitExVat = upc > 0 ? cp / upc : cp;
     const costPerUnitIncVat = costPerUnitExVat * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
 
-    // Decision logic
-    if (vel < 0.5 && (!epos || epos.weeklyVel === 0)) {
-      // Zero or near-zero velocity — TEST or SKIP
-      if (cp > 0 && por >= 25) {
-        // Interesting POR, test with 1 case
-        const totalInc = Math.round(cp * 1 * 1.2 * 100) / 100;
-        decisions.push({
-          product: product_name, eposMatch: eposMatch || "No match", source: item.source || "",
-          casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty: 1,
-          cover: "TEST", units: upc, totalInc, rrp: item.rrp || "",
-          decision: "TEST", notes: `No/low EPOS velocity (${vel}/wk). Testing with 1 case. ${por}% POR.`,
-        });
+    const baseFields = {
+      product: product_name, eposMatch: eposMatch || "No match", source: item.source || "",
+      casePrice: cp, por, rrp: item.rrp || "", upc,
+    };
+
+    // ONE-OFF GUARD
+    const isOneOff = epos?.isOneOff || false;
+    const yearlyAvg = epos?.yearlyAvg || 0;
+
+    if (isOneOff) {
+      skips.push({ product: product_name, reason: `One-off purchase — ${epos.weeklyVel}/wk last week but only ${yearlyAvg.toFixed(1)}/wk yearly avg. Not a real seller.` });
+      return;
+    }
+
+    // ZERO VELOCITY — no sales at all
+    if (vel === 0 && yearlyAvg === 0) {
+      if (cp > 0 && por >= 20) {
+        const totalInc = Math.round(cp * 1.2 * 100) / 100;
+        decisions.push({ ...baseFields, vel: 0, qty: 1, cover: "TEST", units: upc, totalInc, decision: "TEST",
+          notes: `No EPOS history. Testing 1 case. ${por}% POR.` });
         totalSpend += totalInc;
       } else {
-        skips.push({ product: product_name, reason: `Zero velocity in EPOS${por > 0 ? `, ${por}% POR` : ""}. No demand signal.` });
+        skips.push({ product: product_name, reason: `Zero velocity — no sales history.${por > 0 ? ` ${por}% POR.` : ""}` });
       }
       return;
     }
 
-    // Calculate cover and qty
+    // LOW VELOCITY — vel < 1 AND yearly < 1
+    if (vel < 1 && yearlyAvg < 1) {
+      if (por >= 20) {
+        const totalInc = Math.round(cp * 1.2 * 100) / 100;
+        decisions.push({ ...baseFields, vel: Math.round(vel * 10) / 10, qty: 1, cover: "TEST", units: upc, totalInc, decision: "TEST",
+          notes: `Low velocity (${vel}/wk blended, ${yearlyAvg}/wk yearly). Testing 1 case. ${por}% POR.` });
+        totalSpend += totalInc;
+      } else {
+        skips.push({ product: product_name, reason: `Low velocity (${vel}/wk) and ${por}% POR. Not worth testing.` });
+      }
+      return;
+    }
+
+    // BUY — calculate cover with correct rules
     let targetWeeks;
-    if (vel >= 10) targetWeeks = 8; // Fast movers: aim for 8wk
-    else if (vel >= 4) targetWeeks = 6; // Medium: 6wk
-    else targetWeeks = 4; // Slow: 4wk
+    if (vel >= FAST_VEL) targetWeeks = 8;
+    else if (vel >= 4) targetWeeks = 6;
+    else targetWeeks = 4;
 
     let qty = Math.ceil((vel * targetWeeks) / upc);
-    let coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
-
-    // Enforce 10wk cap
-    while (coverWeeks > 10.5 && qty > 1) {
-      qty--;
-      coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
-    }
-    // Minimum 1 case
     if (qty < 1) qty = 1;
-    coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+    let coverWeeks = (qty * upc) / vel;
 
+    // Enforce hard cap
+    while (coverWeeks > COVER_MAX && qty > 1) {
+      qty--;
+      coverWeeks = (qty * upc) / vel;
+    }
+
+    // Enforce floor (fast movers min 4wk, others min 3wk)
+    const coverFloor = vel >= FAST_VEL ? 4 : COVER_MIN;
+    while (coverWeeks < coverFloor && coverWeeks < COVER_MAX) {
+      qty++;
+      coverWeeks = (qty * upc) / vel;
+      if (coverWeeks > COVER_MAX) { qty--; coverWeeks = (qty * upc) / vel; break; }
+    }
+
+    coverWeeks = Math.round(coverWeeks);
     const totalInc = Math.round(cp * qty * 1.2 * 100) / 100;
     const totalUnits = qty * upc;
 
     decisions.push({
-      product: product_name, eposMatch: eposMatch || "", source: item.source || "",
-      casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty,
-      cover: `~${Math.round(coverWeeks)}wk`, units: totalUnits, totalInc, rrp: item.rrp || "",
-      decision: "BUY",
-      notes: `EPOS: ${epos.product} at ${epos.weeklyVel}/wk (last 7d), ${epos.monthlyAvg}/wk (monthly avg), blended ${vel}/wk. ${qty} case${qty > 1 ? "s" : ""} = ${totalUnits} units = ~${Math.round(coverWeeks)}wk cover. ${por}% POR.`,
+      ...baseFields, vel: Math.round(vel * 10) / 10, qty, upc,
+      cover: `~${coverWeeks}wk`, units: totalUnits, totalInc, decision: "BUY",
+      notes: `EPOS: ${epos.product} — ${epos.weeklyVel}/wk (7d), ${epos.monthlyAvg}/wk (monthly), ${yearlyAvg}/wk (yearly), blended ${vel}/wk. ${qty} case${qty > 1 ? "s" : ""} × ${upc} = ${totalUnits} units = ~${coverWeeks}wk. ${por}% POR.`,
     });
     totalSpend += totalInc;
   });
 
-  // Budget rebalance — if over budget, reduce slowest movers first
+  // Budget rebalance — Fix 5: use stored upc, not recalculated
   const budgetNum = Number(budget) || 750;
   const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
   while (totalSpend > budgetNum * 1.05 && buyItems.length > 0) {
     const slowest = buyItems[0];
     if (slowest.qty > 1) {
       slowest.qty--;
-      const upc = slowest.units / (slowest.qty + 1);
-      slowest.units = slowest.qty * upc;
+      slowest.units = slowest.qty * slowest.upc;
       slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
       slowest.cover = `~${Math.round(slowest.units / slowest.vel)}wk`;
       slowest.notes += " [Reduced for budget]";
       totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
     } else {
-      buyItems.shift(); // Can't reduce further, skip to next
+      buyItems.shift();
     }
   }
 
-  // If under budget by a lot, increase fastest movers
+  // Increase fastest movers if under budget
   const fastItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => b.vel - a.vel);
   for (const fast of fastItems) {
     if (totalSpend >= budgetNum * 0.95) break;
-    const upc = fast.units / fast.qty;
-    const newCover = ((fast.qty + 1) * upc) / fast.vel;
-    if (newCover <= 10) {
+    const newCover = ((fast.qty + 1) * fast.upc) / fast.vel;
+    if (newCover <= COVER_MAX) {
       fast.qty++;
-      fast.units = fast.qty * upc;
+      fast.units = fast.qty * fast.upc;
       fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
       fast.cover = `~${Math.round(newCover)}wk`;
       fast.notes += " [Increased — budget available]";
@@ -209,7 +265,6 @@ function calculateDecisions(matchedProducts, budget) {
     }
   }
 
-  // Calculate summary stats
   const estRevenue = decisions.reduce((s, d) => {
     const rrpNum = parseFloat((d.rrp || "").replace(/[^0-9.]/g, "")) || 0;
     return s + (rrpNum * (d.units || 0));
@@ -267,6 +322,10 @@ STRICT MATCHING RULES:
 5. "Smirnoff" can ONLY match EPOS names containing "Smirnoff". Check PM code too — Pm1759 ≠ Pm2359.
 6. If NO EPOS name matches the brand + format, return null. Do NOT pick the nearest unrelated product.
 7. Return the EXACT EPOS name string from the list above, spelled exactly as shown.
+8. SPIRITS: If the promo shows a single bottle (e.g. "Smirnoff 70cl £14.99") with no case format multiplier, units_per_case = 1. Do not assume a case of 6.
+9. PM CHANGES: If the promo PM price differs from ALL EPOS PM codes for that brand+size (e.g. promo says PM£2.80 but EPOS only has Pm265), return null — do not guess it's the same product.
+10. NEVER sum multiple EPOS variants to create a combined velocity. "Pepsi Max Pm139" and "Pepsi Max Pm219" are DIFFERENT products. Match to ONE specific EPOS line only.
+11. "/" in product names (e.g. "Chardonnay/Merlot") means one MIXED CASE containing both. Match to the PRIMARY variant (first named) in EPOS. Note if secondary variant exists separately.
 
 CRITICAL: It is MUCH better to return null (no match) than to match to the wrong product. A wrong match causes the store to over-order products they don't sell.
 
