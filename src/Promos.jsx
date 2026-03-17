@@ -64,22 +64,44 @@ function buildVelocityMap(allDays) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MATCHING ENGINE — finds EPOS match for a leaflet product
+// MATCHING ENGINE — finds EPOS match, strict brand validation
 // ═══════════════════════════════════════════════════════════════════
 function findEposMatch(leafletProduct, eposMatch, velMap) {
-  if (!eposMatch) return null;
+  if (!eposMatch || eposMatch === "null" || eposMatch === "No match") return null;
   const search = eposMatch.toLowerCase().trim();
+  
   // Direct key match
   if (velMap[search]) return velMap[search];
-  // Search by product name
+  
+  // Exact product name match
   for (const v of Object.values(velMap)) {
     if (v.product.toLowerCase() === search) return v;
   }
-  // Partial match — product name contains the search term
+  
+  // Close match — but validate the BRAND matches
+  // Extract first word (brand) from both the leaflet product and the EPOS match
+  const leafletBrand = (leafletProduct || "").toLowerCase().split(/[\s\/]+/)[0];
+  const matchBrand = search.split(/[\s\/]+/)[0];
+  
   for (const v of Object.values(velMap)) {
-    if (v.product.toLowerCase().includes(search) || search.includes(v.product.toLowerCase())) return v;
+    const eposBrand = v.product.toLowerCase().split(/[\s\/]+/)[0];
+    const eposName = v.product.toLowerCase();
+    
+    // Product name contains the search term — but brands must agree
+    if (eposName.includes(search) && eposBrand === matchBrand) return v;
+    if (search.includes(eposName) && eposName.length > 5 && eposBrand === matchBrand) return v;
   }
-  return null;
+  
+  // Last resort: search contains significant part of EPOS name, brands match
+  for (const v of Object.values(velMap)) {
+    const eposWords = v.product.toLowerCase().split(/\s+/);
+    const searchWords = search.split(/\s+/);
+    // At least 2 words must match and first word (brand) must match
+    const commonWords = eposWords.filter(w => searchWords.some(sw => sw.includes(w) || w.includes(sw)));
+    if (commonWords.length >= 2 && eposWords[0] === searchWords[0]) return v;
+  }
+  
+  return null; // No confident match — better to return null than wrong product
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -229,25 +251,27 @@ RESPOND with ONLY a JSON array: [{"product_name":"","case_format":"","case_price
 }
 
 function step2Prompt(extractedProducts, eposNames) {
-  return `Match each promotion product to the correct EPOS product name.
+  return `Match each promotion product to the EXACT correct EPOS product name from the store's till system.
 
-PROMOTION PRODUCTS:
+PROMOTION PRODUCTS TO MATCH:
 ${extractedProducts.map((p, i) => `${i + 1}. ${p.product_name} (${p.case_format}, PM/RRP: ${p.rrp})`).join("\n")}
 
-EPOS PRODUCT NAMES (from the store's till system):
+EPOS PRODUCT NAMES (the ONLY valid matches — do not invent names):
 ${eposNames.join("\n")}
 
-MATCHING RULES:
-1. Match by PM price code AND size. "Pepsi Max 12x500ml PM£1.39" → find EPOS with "Pm139" or "Pet 500". NOT "Pm219" (that's 2L).
-2. "Pepsi Max 6x2Ltr PM£2.19" → match "Pepsi Max Pm219"
-3. "San Miguel 6x4x568ml PM£7.99" → match "San Miguel Pm799"
-4. 568ml ≠ 440ml. Different products. Never combine.
-5. "/" means BOTH variants: "Hardy's Chardonnay/Merlot" → search for BOTH "Hardys Vr Chardonnay" AND "Hardys Vr Merlot". Return the one with higher velocity, note the other exists.
-6. If no match found, return null for epos_match.
-7. Return the EXACT EPOS name as it appears in the list above.
+STRICT MATCHING RULES:
+1. Match by BRAND + PM code + SIZE. "Pepsi Max 12x500ml PM£1.39" → find an EPOS name with "Pepsi" AND ("Pm139" or "Pet 500"). NOT "Pepsi Max Pm219" (wrong size).
+2. "/" in promo names means BOTH variants: "Hardy's Chardonnay/Merlot" → search for "Hardys" + "Chardonnay" in EPOS. Return that match. Also note if Merlot exists separately.
+3. BRAND MUST MATCH. "I Heart Prosecco" can ONLY match an EPOS name containing "Heart" or "Prosecco". It CANNOT match "Hardys" or "Chardonnay" — those are different products entirely.
+4. "K Cider" can ONLY match an EPOS name containing "K Cider" or "Knights". It CANNOT match "Heineken" or "Fosters" or any other brand.
+5. "Smirnoff" can ONLY match EPOS names containing "Smirnoff". Check PM code too — Pm1759 ≠ Pm2359.
+6. If NO EPOS name matches the brand + format, return null. Do NOT pick the nearest unrelated product.
+7. Return the EXACT EPOS name string from the list above, spelled exactly as shown.
 
-RESPOND with ONLY a JSON array matching the same order as the promotion products:
-[{"promo_index":0,"epos_match":"exact EPOS name or null","match_notes":"why this match"}]`;
+CRITICAL: It is MUCH better to return null (no match) than to match to the wrong product. A wrong match causes the store to over-order products they don't sell.
+
+RESPOND with ONLY a JSON array (same order as promotion products):
+[{"promo_index":0,"epos_match":"exact EPOS name or null","match_notes":"why matched or why no match found"}]`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -372,17 +396,29 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
       const matchedProducts = extracted.map((prod, i) => {
         const match = matches.find(m => m.promo_index === i) || matches[i] || {};
         const eposName = match.epos_match;
-        // Find in velocity map
         let epos = null;
-        if (eposName) {
-          epos = findEposMatch(prod.product_name, eposName, velMap);
+        
+        if (eposName && eposName !== "null") {
+          // BRAND VALIDATION: extract first significant word from both names
+          const promoBrand = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          const matchBrand = (eposName || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          
+          // If brands are completely different, reject the match
+          const brandsRelated = promoBrand === matchBrand || 
+            eposName.toLowerCase().includes(promoBrand) || 
+            (prod.product_name || "").toLowerCase().includes(matchBrand);
+          
+          if (brandsRelated) {
+            epos = findEposMatch(prod.product_name, eposName, velMap);
+          } else {
+            console.warn(`Brand mismatch rejected: "${prod.product_name}" → "${eposName}" (${promoBrand} ≠ ${matchBrand})`);
+          }
         }
-        // Parse RRP number
+        
         const rrpNum = parseFloat((prod.rrp || "").replace(/[^0-9.]/g, "")) || 0;
-
         return {
           ...prod, rrp_num: rrpNum,
-          epos, eposMatch: epos ? epos.product : (eposName || "No match"),
+          epos, eposMatch: epos ? epos.product : "No match",
           source: supplier,
         };
       });
