@@ -154,36 +154,47 @@ function matchPromoToEpos(promoName, promoRrp, velMap) {
 // PACK STRUCTURE VALIDATOR
 // ═══════════════════════════════════════════════════════════════════
 function parseUnitsPerCase(caseFormat, aiValue, productName) {
-  // Helper: extract units from a format string like "24x440ml", "6x4x568ml", "6x2ltr"
+  // Extract sellable units from a format string.
+  // KEY RULE: "6x4x440ml" = 6 sellable PACKS (you sell the 4-pack, not individual cans).
+  //           "24x440ml"  = 24 individual cans.
+  //           "12x500ml"  = 12 individual bottles.
+  // The OUTER number is always the sellable unit count.
   const extractFromString = (str) => {
     if (!str) return null;
     const s = str.trim();
-    // "6x4x568ml" → 6 sellable packs (outer number is packs, inner is cans per pack)
-    const multi = s.match(/^(\d+)x(\d+)x/i);
+    // Triple format "6x4x568ml" or "6x4x440ml" → 6 sellable packs
+    const multi = s.match(/^(\d+)x(\d+)x[\d.]+(?:ml|cl|ltr)/i);
     if (multi) return parseInt(multi[1]);
-    // "24x440ml", "12x500ml", "6x75cl", "6x2ltr" → first number = individual units
-    const single = s.match(/^(\d+)x/i);
+    // Double format "24x440ml", "12x500ml", "6x75cl", "6x2ltr" → first number = units
+    const single = s.match(/^(\d+)x[\d.]+(?:ml|cl|ltr)/i);
     if (single) return parseInt(single[1]);
-    // "70cl", "1ltr" with no multiplier → single bottle
+    // Plain volume "70cl", "1ltr" = single bottle
     if (/^[\d.]+(cl|ml|ltr)/i.test(s)) return 1;
     return null;
   };
 
-  // 1. Try case_format first (most reliable when present)
+  // 1. Try case_format first — most reliable when AI fills it correctly
   const fromFormat = extractFromString(caseFormat);
   if (fromFormat !== null) return fromFormat;
 
-  // 2. Try extracting format from product_name
-  // e.g. "K Cider 24x440ml RRP1.99" → find "24x440ml" in the name
+  // 2. Try extracting from product_name as fallback
+  // IMPORTANT: must match triple format BEFORE double to avoid "4x440ml"
+  // matching inside "6x4x440ml". The regex tries triple first.
   if (productName) {
-    const formatInName = (productName || "").match(/(\d+x\d+x[\d.]+(?:ml|cl|ltr)|\d+x[\d.]+(?:ml|cl|ltr))/i);
-    if (formatInName) {
-      const fromName = extractFromString(formatInName[1]);
-      if (fromName !== null) return fromName;
+    const tripleMatch = (productName || "").match(/(\d+x\d+x[\d.]+(?:ml|cl|ltr))/i);
+    if (tripleMatch) {
+      const fromTriple = extractFromString(tripleMatch[1]);
+      if (fromTriple !== null) return fromTriple;
+    }
+    // Only try double format if no triple was found
+    const doubleMatch = (productName || "").match(/(\d+x[\d.]+(?:ml|cl|ltr))/i);
+    if (doubleMatch) {
+      const fromDouble = extractFromString(doubleMatch[1]);
+      if (fromDouble !== null) return fromDouble;
     }
   }
 
-  // 3. Fall back to AI-provided value, sanity-capped at 1-48
+  // 3. AI fallback — sanity-capped
   const ai = Number(aiValue) || 1;
   if (ai >= 1 && ai <= 48) return ai;
 
@@ -315,15 +326,18 @@ For each product return:
 - case_format: The FULL pack format EXACTLY as printed. e.g. "24x440ml", "12x500ml", "6x4x568ml", "6x2ltr", "6x70cl". This is CRITICAL — always include it.
 - case_price: The WHOLESALE CASE PRICE in pounds (ex VAT). The big price shown (WSP). NOT the retail price.
 - rrp: The retail or PM price per unit e.g. "PM1.40", "PM7.99", "RRP1.99"
-- units_per_case: Sellable units per case. READ FROM case_format:
-    24x440ml = 24 cans (24 units)
-    12x500ml = 12 bottles (12 units)
-    6x4x568ml = 6 four-packs (6 units, each pack sells at the PM price)
-    6x4x440ml = 6 four-packs (6 units)
-    6x2ltr = 6 bottles (6 units)
-    6x70cl = 6 bottles (6 units)
-    6x75cl = 6 bottles (6 units)
-    6x1ltr = 6 bottles (6 units)
+- units_per_case: Sellable units per case. The OUTER number in the format is ALWAYS the answer.
+    TRIPLE format (AxBxC): A = sellable units. "6x4x440ml" = 6 (you sell 6 four-packs). NOT 24.
+    DOUBLE format (AxB): A = sellable units. "24x440ml" = 24. "12x500ml" = 12. "6x75cl" = 6.
+    Examples:
+      6x4x568ml → units_per_case: 6   (six 4-packs, sell each 4-pack at PM price)
+      6x4x440ml → units_per_case: 6   (six 4-packs — DO NOT multiply 6x4=24, that is WRONG)
+      24x440ml  → units_per_case: 24  (twenty-four individual cans)
+      12x500ml  → units_per_case: 12  (twelve individual bottles)
+      6x2ltr    → units_per_case: 6   (six 2-litre bottles)
+      6x75cl    → units_per_case: 6   (six 75cl bottles)
+      6x70cl    → units_per_case: 6   (six 70cl bottles)
+      6x1ltr    → units_per_case: 6   (six 1-litre bottles)
 - deal_notes: Any special offers shown
 
 CRITICAL RULES:
