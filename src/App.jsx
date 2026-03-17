@@ -1,564 +1,515 @@
 // ═══════════════════════════════════════════════════════════════════
-// APP — Main shell: header, nav, routing
+// PROMOS v4 — JS calculates everything, AI reads images + matches only
 // ═══════════════════════════════════════════════════════════════════
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { C, Stat, SectionCard, EmptyState, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
-import { getSavedOwnerId, saveOwnerId, logout, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
-import { analyzeData, getPrevWeekData } from "./analysis.js";
-import Dashboard from "./Dashboard.jsx";
-import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
-import Search from "./Search.jsx";
-import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
-import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
-import LeafletScanner from "./Promos.jsx";
+import { useState, useEffect, useMemo } from "react";
+import { C, SectionCard, Badge, EmptyState, fi, f } from "./components.jsx";
+import { ANTHROPIC_KEY, AI_HDR } from "./config.js";
+import { savePromoScan, loadPromoScans, loadPromoDecisions, loadPromoSkips, loadAllPriceHistory, updatePromoDecision, deletePromoScan, saveCorrection } from "./supabase.js";
 
-// ─── SETTINGS SECTION ───────────────────────────────────────────
-function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
-  const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
-  const [confirmLogout, setConfirmLogout] = useState(false);
-  const [currentPin, setCurrentPin] = useState("");
-  const [newPin, setNewPin] = useState("");
-  const [confirmNewPin, setConfirmNewPin] = useState("");
-  const [pinMsg, setPinMsg] = useState(null);
-  const [savingPin, setSavingPin] = useState(false);
+const MAX_SCANS_PER_WEEK = 5;
+const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
-  const handleChangePin = async () => {
-    if (currentPin.length !== 4) { setPinMsg("Enter your current 4-digit PIN"); return; }
-    if (newPin.length !== 4) { setPinMsg("New PIN must be 4 digits"); return; }
-    if (newPin !== confirmNewPin) { setPinMsg("New PINs don't match"); return; }
-    setSavingPin(true); setPinMsg(null);
-    const valid = await verifyPin(clientId, currentPin);
-    if (!valid) { setPinMsg("Current PIN is incorrect"); setSavingPin(false); return; }
-    await setPin(clientId, newPin);
-    setPinMsg("✓ PIN updated successfully");
-    setCurrentPin(""); setNewPin(""); setConfirmNewPin("");
-    setSavingPin(false);
+// ═══════════════════════════════════════════════════════════════════
+// VELOCITY ENGINE — calculates blended weekly velocity from EPOS data
+// ═══════════════════════════════════════════════════════════════════
+function buildVelocityMap(allDays) {
+  if (!allDays || !allDays.length) return {};
+  // Sort days by date
+  const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+  const totalDays = sorted.length;
+
+  // Last 7 days
+  const last7 = sorted.slice(-Math.min(7, totalDays));
+  // Last 28 days (monthly)
+  const last28 = sorted.slice(-Math.min(28, totalDays));
+  const monthWeeks = Math.max(1, last28.length / 7);
+
+  // Aggregate by product for each period
+  const agg = (days) => {
+    const map = {};
+    days.forEach(d => d.items.forEach(i => {
+      const key = (i.barcode || i.product).toLowerCase();
+      if (!map[key]) map[key] = { product: i.product, barcode: i.barcode, category: i.category, qty: 0, gross: 0, grossMargin: i.grossMargin, hasCost: i.hasCost };
+      map[key].qty += i.qty;
+      map[key].gross += i.gross;
+      if (i.grossMargin != null) map[key].grossMargin = i.grossMargin;
+    }));
+    return map;
   };
 
-  const pinInp = { width: "100%", padding: "14px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 22, fontWeight: 800, letterSpacing: 8, textAlign: "center", outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
+  const weekMap = agg(last7);
+  const monthMap = agg(last28);
 
-  if (activeSettings === "uploads") return (
-    <div>
-      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
-      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} />
-    </div>
-  );
+  // Build blended velocity map
+  const result = {};
+  const allKeys = new Set([...Object.keys(weekMap), ...Object.keys(monthMap)]);
 
-  if (activeSettings === "pin") return (
-    <SectionCard title="Change PIN" icon="🔑">
-      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CURRENT PIN</div>
-      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={currentPin} onChange={e => { setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>NEW PIN</div>
-      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={newPin} onChange={e => { setNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM NEW PIN</div>
-      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={confirmNewPin} onChange={e => { setConfirmNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
-      {pinMsg && <div style={{ fontSize: 13, color: pinMsg.startsWith("✓") ? C.greenText : C.redText, marginBottom: 12 }}>{pinMsg}</div>}
-      <button onClick={handleChangePin} disabled={savingPin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>{savingPin ? "Saving..." : "Update PIN"}</button>
-    </SectionCard>
-  );
+  allKeys.forEach(key => {
+    const w = weekMap[key];
+    const m = monthMap[key];
+    const product = (w || m).product;
+    const weeklyVel = w ? w.qty : 0; // Actual units sold in last 7 days
+    const monthlyAvg = m ? Math.round((m.qty / monthWeeks) * 10) / 10 : 0; // Monthly weekly average
+    // Blended: 70% recent (last 7 days), 30% monthly average
+    const blended = Math.round(((0.7 * weeklyVel) + (0.3 * monthlyAvg)) * 10) / 10;
+    const sellPrice = (m || w).qty > 0 ? Math.round(((m || w).gross / (m || w).qty) * 100) / 100 : 0;
 
+    result[key] = {
+      product, barcode: (w || m).barcode, category: (w || m).category,
+      weeklyVel, monthlyAvg, blended,
+      sellPrice, grossMargin: (w || m).grossMargin, hasCost: (w || m).hasCost,
+    };
+  });
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MATCHING ENGINE — finds EPOS match for a leaflet product
+// ═══════════════════════════════════════════════════════════════════
+function findEposMatch(leafletProduct, eposMatch, velMap) {
+  if (!eposMatch) return null;
+  const search = eposMatch.toLowerCase().trim();
+  // Direct key match
+  if (velMap[search]) return velMap[search];
+  // Search by product name
+  for (const v of Object.values(velMap)) {
+    if (v.product.toLowerCase() === search) return v;
+  }
+  // Partial match — product name contains the search term
+  for (const v of Object.values(velMap)) {
+    if (v.product.toLowerCase().includes(search) || search.includes(v.product.toLowerCase())) return v;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DECISION ENGINE — calculates POR, cover, qty, decision
+// ═══════════════════════════════════════════════════════════════════
+function calculateDecisions(matchedProducts, budget) {
+  const decisions = [];
+  const skips = [];
+  let totalSpend = 0;
+
+  // First pass — calculate everything
+  matchedProducts.forEach(item => {
+    const { product_name, case_price, rrp_num, units_per_case, epos, eposMatch } = item;
+    const vel = epos ? epos.blended : 0;
+    const cp = Number(case_price) || 0;
+    const upc = Number(units_per_case) || 1;
+    const rrp = Number(rrp_num) || 0;
+
+    // POR calculation
+    const costPerUnitExVat = cp / upc;
+    const costPerUnitIncVat = costPerUnitExVat * 1.2;
+    const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
+
+    // Decision logic
+    if (vel < 0.5 && (!epos || epos.weeklyVel === 0)) {
+      // Zero or near-zero velocity — TEST or SKIP
+      if (cp > 0 && por >= 25) {
+        // Interesting POR, test with 1 case
+        const totalInc = Math.round(cp * 1 * 1.2 * 100) / 100;
+        decisions.push({
+          product: product_name, eposMatch: eposMatch || "No match", source: item.source || "",
+          casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty: 1,
+          cover: "TEST", units: upc, totalInc, rrp: item.rrp || "",
+          decision: "TEST", notes: `No/low EPOS velocity (${vel}/wk). Testing with 1 case. ${por}% POR.`,
+        });
+        totalSpend += totalInc;
+      } else {
+        skips.push({ product: product_name, reason: `Zero velocity in EPOS${por > 0 ? `, ${por}% POR` : ""}. No demand signal.` });
+      }
+      return;
+    }
+
+    // Calculate cover and qty
+    let targetWeeks;
+    if (vel >= 10) targetWeeks = 8; // Fast movers: aim for 8wk
+    else if (vel >= 4) targetWeeks = 6; // Medium: 6wk
+    else targetWeeks = 4; // Slow: 4wk
+
+    let qty = Math.ceil((vel * targetWeeks) / upc);
+    let coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+
+    // Enforce 10wk cap
+    while (coverWeeks > 10.5 && qty > 1) {
+      qty--;
+      coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+    }
+    // Minimum 1 case
+    if (qty < 1) qty = 1;
+    coverWeeks = Math.round((qty * upc) / vel * 10) / 10;
+
+    const totalInc = Math.round(cp * qty * 1.2 * 100) / 100;
+    const totalUnits = qty * upc;
+
+    decisions.push({
+      product: product_name, eposMatch: eposMatch || "", source: item.source || "",
+      casePrice: cp, por, vel: Math.round(vel * 10) / 10, qty,
+      cover: `~${Math.round(coverWeeks)}wk`, units: totalUnits, totalInc, rrp: item.rrp || "",
+      decision: "BUY",
+      notes: `EPOS: ${epos.product} at ${epos.weeklyVel}/wk (last 7d), ${epos.monthlyAvg}/wk (monthly avg), blended ${vel}/wk. ${qty} case${qty > 1 ? "s" : ""} = ${totalUnits} units = ~${Math.round(coverWeeks)}wk cover. ${por}% POR.`,
+    });
+    totalSpend += totalInc;
+  });
+
+  // Budget rebalance — if over budget, reduce slowest movers first
+  const budgetNum = Number(budget) || 750;
+  const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
+  while (totalSpend > budgetNum * 1.05 && buyItems.length > 0) {
+    const slowest = buyItems[0];
+    if (slowest.qty > 1) {
+      slowest.qty--;
+      const upc = slowest.units / (slowest.qty + 1);
+      slowest.units = slowest.qty * upc;
+      slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
+      slowest.cover = `~${Math.round(slowest.units / slowest.vel)}wk`;
+      slowest.notes += " [Reduced for budget]";
+      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+    } else {
+      buyItems.shift(); // Can't reduce further, skip to next
+    }
+  }
+
+  // If under budget by a lot, increase fastest movers
+  const fastItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => b.vel - a.vel);
+  for (const fast of fastItems) {
+    if (totalSpend >= budgetNum * 0.95) break;
+    const upc = fast.units / fast.qty;
+    const newCover = ((fast.qty + 1) * upc) / fast.vel;
+    if (newCover <= 10) {
+      fast.qty++;
+      fast.units = fast.qty * upc;
+      fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
+      fast.cover = `~${Math.round(newCover)}wk`;
+      fast.notes += " [Increased — budget available]";
+      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+    }
+  }
+
+  // Calculate summary stats
+  const estRevenue = decisions.reduce((s, d) => {
+    const rrpNum = parseFloat((d.rrp || "").replace(/[^0-9.]/g, "")) || 0;
+    return s + (rrpNum * (d.units || 0));
+  }, 0);
+  const estProfit = Math.round((estRevenue - totalSpend) * 100) / 100;
+  const roi = totalSpend > 0 ? Math.round((estProfit / totalSpend) * 1000) / 10 : 0;
+
+  return {
+    decisions, skips,
+    totalSpend: Math.round(totalSpend * 100) / 100,
+    remaining: Math.round((budgetNum - totalSpend) * 100) / 100,
+    budgetPct: Math.round((totalSpend / budgetNum) * 1000) / 10,
+    estRevenue: Math.round(estRevenue * 100) / 100,
+    estProfit, roi,
+    lines: { buy: decisions.filter(d => d.decision === "BUY").length, test: decisions.filter(d => d.decision === "TEST").length, skip: skips.length },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI PROMPTS — image reading + product matching only
+// ═══════════════════════════════════════════════════════════════════
+function step1Prompt(supplier) {
+  return `Read this wholesale promotion leaflet from ${supplier}. Extract EVERY product shown.
+
+For each product return:
+- product_name: Full name with brand, variant, size (e.g. "Pepsi Max Original/Cherry 12x500ml PM£1.39")
+- case_format: e.g. "12x500ml", "6x4x568ml", "24x250ml", "6x2ltr"
+- case_price: The WHOLESALE CASE PRICE (ex VAT). The big price labelled WSP. NOT the retail price.
+- rrp: The retail/PM price per unit (e.g. "PM£1.39", "PM£7.99", "RRP£1.99")
+- units_per_case: Sellable units. 6x4x568ml=6 packs. 12x500ml=12. 24x250ml=24. 6x2ltr=6. 6x70cl=6. 10x100g=10.
+- deal_notes: Any special offers ("Buy 3 for £13", "Was £8.39")
+
+CRITICAL:
+- case_price is for ONE CASE not per unit. "WSP: £5.99" = £5.99 for the whole case.
+- If a product name has "/" it means BOTH varieties in one case. "Hardy's Chardonnay/Merlot" = case contains both Chardonnay AND Merlot bottles. List it as ONE product with the full name including both.
+- Read prices EXACTLY as printed. Do not calculate or infer.
+
+RESPOND with ONLY a JSON array: [{"product_name":"","case_format":"","case_price":0,"rrp":"","units_per_case":0,"deal_notes":""}]`;
+}
+
+function step2Prompt(extractedProducts, eposNames) {
+  return `Match each promotion product to the correct EPOS product name.
+
+PROMOTION PRODUCTS:
+${extractedProducts.map((p, i) => `${i + 1}. ${p.product_name} (${p.case_format}, PM/RRP: ${p.rrp})`).join("\n")}
+
+EPOS PRODUCT NAMES (from the store's till system):
+${eposNames.join("\n")}
+
+MATCHING RULES:
+1. Match by PM price code AND size. "Pepsi Max 12x500ml PM£1.39" → find EPOS with "Pm139" or "Pet 500". NOT "Pm219" (that's 2L).
+2. "Pepsi Max 6x2Ltr PM£2.19" → match "Pepsi Max Pm219"
+3. "San Miguel 6x4x568ml PM£7.99" → match "San Miguel Pm799"
+4. 568ml ≠ 440ml. Different products. Never combine.
+5. "/" means BOTH variants: "Hardy's Chardonnay/Merlot" → search for BOTH "Hardys Vr Chardonnay" AND "Hardys Vr Merlot". Return the one with higher velocity, note the other exists.
+6. If no match found, return null for epos_match.
+7. Return the EXACT EPOS name as it appears in the list above.
+
+RESPOND with ONLY a JSON array matching the same order as the promotion products:
+[{"promo_index":0,"epos_match":"exact EPOS name or null","match_notes":"why this match"}]`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UI COMPONENTS
+// ═══════════════════════════════════════════════════════════════════
+function PromoRow({ item, onEdit, priceHistory }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [newDec, setNewDec] = useState(item.user_override || item.decision);
+  const [notes, setNotes] = useState(item.user_notes || "");
+  const dec = item.user_override || item.decision;
+  const decBg = dec === "BUY" ? C.greenDim : dec === "TEST" ? C.orangeDim : C.redDim;
+  const decBd = dec === "BUY" ? "rgba(34,197,94,0.2)" : dec === "TEST" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)";
+  const cp = item.casePrice || item.case_price;
+  const prev = priceHistory?.find(h => h.product?.toLowerCase() === item.product?.toLowerCase() && h.scan_id !== item.scan_id);
+  const chg = prev && cp ? Math.round((Number(cp) - Number(prev.case_price)) * 100) / 100 : null;
   return (
-    <SectionCard title="Settings" icon="⚙️">
-      <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16 }}>Logged in as <strong style={{ color: C.white }}>{clientName}</strong></div>
-      {[
-        { label: "Manage Uploads", sub: "View, delete uploaded data", icon: "📋", action: () => setActiveSettings("uploads") },
-        { label: "Change PIN", sub: "Update your 4-digit PIN", icon: "🔑", action: () => setActiveSettings("pin") },
-      ].map((item, i) => (
-        <div key={i} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginBottom: 8, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
-          <span style={{ fontSize: 22 }}>{item.icon}</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.white }}>{item.label}</div>
-            <div style={{ fontSize: 12, color: C.textMuted }}>{item.sub}</div>
-          </div>
-          <span style={{ fontSize: 14, color: C.textMuted }}>›</span>
-        </div>
-      ))}
-      <div onClick={() => setConfirmLogout(true)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginTop: 16, borderRadius: 12, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", cursor: "pointer" }}>
-        <span style={{ fontSize: 22 }}>🚪</span>
+    <div style={{ marginBottom: 6 }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: open ? "10px 10px 0 0" : 10, background: open ? decBg : C.surface, border: `1px solid ${open ? decBd : C.border}`, cursor: "pointer" }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.redText }}>Log Out</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Return to login screen</div>
+          <div style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{item.product}</div>
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{item.vel != null ? `${item.vel}/wk` : "—"} · {item.por != null ? `${Math.round(Number(item.por))}% POR` : "—"}</div>
+          {item.eposMatch && item.eposMatch !== "No match" && <div style={{ fontSize: 10, color: C.accentLight, marginTop: 1 }}>EPOS: {item.eposMatch}</div>}
+          {chg != null && chg !== 0 && <div style={{ fontSize: 10, marginTop: 2, color: chg < 0 ? C.greenText : C.redText, fontWeight: 600 }}>{chg < 0 ? `£${Math.abs(chg).toFixed(2)} CHEAPER` : `£${chg.toFixed(2)} DEARER`} vs last promo</div>}
         </div>
+        <Badge type={dec === "BUY" ? "HIGH" : dec === "TEST" ? "MED" : "LOW"}>{dec}</Badge>
       </div>
-      {confirmLogout && (
-        <div style={{ marginTop: 16, padding: 16, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 12 }}>Are you sure you want to log out?</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setConfirmLogout(false)} style={{ flex: 1, padding: "12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-            <button onClick={onLogout} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: C.red, color: C.white, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Log Out</button>
+      {open && (
+        <div style={{ padding: "12px 14px", background: decBg, borderRadius: "0 0 10px 10px", border: `1px solid ${decBd}`, borderTop: "none" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+            {[["Case £", cp ? `£${Number(cp).toFixed(2)}` : null], ["Qty", item.qty], ["Cover", item.cover], ["Units", item.units], ["Total", item.totalInc ? f(Number(item.totalInc)) : null], ["RRP", item.rrp]].map(([l, v]) => v ? <div key={l} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 6, padding: "5px 9px" }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase" }}>{l}</div><div style={{ fontSize: 12, fontWeight: 700, color: C.white }}>{v}</div></div> : null)}
           </div>
+          {item.notes && <div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.65, marginBottom: 8 }}>{item.notes}</div>}
+          {item.user_notes && <div style={{ fontSize: 11, color: C.orangeText, marginBottom: 8 }}>✏️ {item.user_notes}</div>}
+          {!editing ? (
+            <button onClick={e => { e.stopPropagation(); setEditing(true); }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✏️ Edit</button>
+          ) : (
+            <div style={{ background: "rgba(0,0,0,0.15)", borderRadius: 8, padding: 10, marginTop: 6 }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{["BUY", "TEST", "SKIP"].map(d => <button key={d} onClick={() => setNewDec(d)} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: newDec === d ? (d === "BUY" ? C.green : d === "TEST" ? "#F39C12" : C.red) : C.surface, color: newDec === d ? C.white : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{d}</button>)}</div>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Why? e.g. wrong product, don't stock this size..." style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, minHeight: 50, outline: "none", resize: "vertical", fontFamily: "Inter, sans-serif", boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={() => setEditing(false)} style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Cancel</button>
+                <button onClick={() => { if (onEdit) onEdit(item, newDec, notes); setEditing(false); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Save</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
-    </SectionCard>
+    </div>
   );
 }
 
-const baseSections = [
-  { id: "dashboard", label: "Dashboard", icon: "📊" },
-  { id: "cats", label: "Categories", icon: "📦" },
-  { id: "trending", label: "Trending", icon: "📈" },
-  { id: "review", label: "Review", icon: "⚠️" },
-  { id: "topsellers", label: "Top Sellers", icon: "💰" },
-  { id: "erosion", label: "Erosion", icon: "🚨" },
-  { id: "missing", label: "Hidden Profit", icon: "🔍" },
-  { id: "ops", label: "Operations", icon: "⚙️" },
-  { id: "actions", label: "Actions", icon: "✅" },
-];
-const monthlySections = [
-  { id: "density", label: "Shelf Density", icon: "🏪" },
-  { id: "competitor", label: "Competitors", icon: "🏷️" },
-  { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
-];
-const alwaysSections = [
-  { id: "leaflet", label: "Promotions", icon: "🎯" },
-  { id: "coming", label: "Coming Up", icon: "📅" },
-  { id: "settings", label: "Settings", icon: "⚙️" },
-  { id: "ai", label: "AI", icon: "🤖" },
-];
+const Mini = ({ label, value, color }) => (<div style={{ flex: "1 1 45%", background: C.surface, borderRadius: 8, padding: "8px 10px", border: `1px solid ${C.border}` }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div><div style={{ fontSize: 14, fontWeight: 800, color: color || C.white }}>{value}</div></div>);
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
-
-const bottomNav = [
-  { id: "home", icon: "🏠", label: "Home" },
-  { id: "search", icon: "🔍", label: "Search" },
-  { id: "grid", icon: "⊞", label: "Sections" },
-  { id: "news", icon: "📰", label: "News" },
-];
-
-const timeRanges = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }, { id: "month", label: "Month" }];
-
-// ─── LANDING / LOGIN / SETUP ────────────────────────────────────
-function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState("landing"); // landing, login, setup-code, setup-id
-  const [inviteCode, setInviteCode] = useState("");
-  const [inviteMsg, setInviteMsg] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [ownerId, setOwnerId] = useState("");
-  const [pin, setLocalPin] = useState("");
-  const [pinConfirm, setPinConfirm] = useState("");
-  const [idMsg, setIdMsg] = useState(null);
+// ═══════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════
+export default function LeafletScanner({ analysis, clientId, allDays }) {
+  const [view, setView] = useState("menu");
+  const [photos, setPhotos] = useState([]); const [previews, setPreviews] = useState([]);
+  const [budget, setBudget] = useState("750"); const [supplier, setSupplier] = useState("");
+  const [scanning, setScanning] = useState(false); const [scanStep, setScanStep] = useState("");
+  const [result, setResult] = useState(null); const [error, setError] = useState(null);
+  const [history, setHistory] = useState([]); const [priceHist, setPriceHist] = useState([]);
+  const [corrections, setCorrections] = useState([]);
+  const [selScan, setSelScan] = useState(null); const [selDecs, setSelDecs] = useState([]); const [selSkips, setSelSkips] = useState([]);
   const [saving, setSaving] = useState(false);
-  // Login state
-  const [loginId, setLoginId] = useState(getSavedOwnerId() || "");
-  const [loginPin, setLoginPin] = useState("");
-  const [loginMsg, setLoginMsg] = useState(null);
-  const [loggingIn, setLoggingIn] = useState(false);
 
-  const inp = { width: "100%", padding: "14px 16px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 16, outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
-  const pinInp = { ...inp, letterSpacing: 8, textAlign: "center", fontSize: 22, fontWeight: 800 };
+  // Pre-calculate velocity map from all uploaded data
+  const velMap = useMemo(() => buildVelocityMap(allDays), [allDays]);
+  const eposNames = useMemo(() => Object.values(velMap).map(v => v.product).sort(), [velMap]);
 
-  const handleInvite = async () => {
-    const code = inviteCode.trim().toUpperCase();
-    if (!code) { setInviteMsg("Enter your invite code"); return; }
-    setChecking(true); setInviteMsg(null);
+  useEffect(() => { if (!clientId) return; (async () => { try { const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]); setHistory(s || []); setPriceHist(p || []); } catch (e) { console.error(e); } })(); }, [clientId]);
+
+  const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  const scansThisWeek = history.filter(s => new Date(s.created_at) >= weekStart).length;
+  const canScan = scansThisWeek < MAX_SCANS_PER_WEEK;
+
+  const addPhotos = (e) => { const files = Array.from(e.target.files || []); setPhotos(p => [...p, ...files]); files.forEach(f => { const r = new FileReader(); r.onload = ev => setPreviews(p => [...p, ev.target.result]); r.readAsDataURL(f); }); };
+  const rmPhoto = i => { setPhotos(p => p.filter((_, j) => j !== i)); setPreviews(p => p.filter((_, j) => j !== i)); };
+
+  // ─── THREE-STEP SCAN ──────────────────────────────────────────
+  const scan = async () => {
+    if (!photos.length || !ANTHROPIC_KEY || !supplier.trim()) return;
+    if (!canScan) { setError(`Weekly limit (${MAX_SCANS_PER_WEEK}) reached.`); return; }
+    setScanning(true); setError(null); setResult(null);
+
     try {
-      const result = await checkInviteCode(code);
-      if (result.valid) setMode("setup-id");
-      else setInviteMsg(result.error || "Invalid code");
-    } catch { setInviteMsg("Could not verify — check connection"); }
-    setChecking(false);
+      const imgs = await Promise.all(photos.map(file => new Promise(res => {
+        const r = new FileReader();
+        r.onload = () => res({ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: r.result.split(",")[1] } });
+        r.readAsDataURL(file);
+      })));
+
+      // ── STEP 1: Read leaflet image ──
+      setScanStep("Step 1/3: Reading leaflet...");
+      const s1 = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: AI_HDR,
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 3000, messages: [{ role: "user", content: [...imgs, { type: "text", text: step1Prompt(supplier) }] }] }),
+      });
+      if (!s1.ok) throw new Error(`Step 1 failed: ${s1.status}`);
+      let s1text = ((await s1.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      const j1s = s1text.indexOf("["); const j1e = s1text.lastIndexOf("]");
+      if (j1s >= 0) s1text = s1text.slice(j1s, j1e + 1);
+      const extracted = JSON.parse(s1text);
+      if (!Array.isArray(extracted) || !extracted.length) throw new Error("No products found. Try a clearer photo.");
+
+      // ── STEP 2: Match products to EPOS ──
+      setScanStep(`Step 2/3: Matching ${extracted.length} products to EPOS...`);
+      const s2 = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: AI_HDR,
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: step2Prompt(extracted, eposNames) }] }),
+      });
+      if (!s2.ok) throw new Error(`Step 2 failed: ${s2.status}`);
+      let s2text = ((await s2.json()).content?.filter(b => b.type === "text").map(b => b.text).join("") || "").replace(/```json|```/g, "").trim();
+      const j2s = s2text.indexOf("["); const j2e = s2text.lastIndexOf("]");
+      if (j2s >= 0) s2text = s2text.slice(j2s, j2e + 1);
+      const matches = JSON.parse(s2text);
+
+      // ── STEP 3: JavaScript calculates everything ──
+      setScanStep("Step 3/3: Calculating decisions...");
+      const matchedProducts = extracted.map((prod, i) => {
+        const match = matches.find(m => m.promo_index === i) || matches[i] || {};
+        const eposName = match.epos_match;
+        // Find in velocity map
+        let epos = null;
+        if (eposName) {
+          epos = findEposMatch(prod.product_name, eposName, velMap);
+        }
+        // Parse RRP number
+        const rrpNum = parseFloat((prod.rrp || "").replace(/[^0-9.]/g, "")) || 0;
+
+        return {
+          ...prod, rrp_num: rrpNum,
+          epos, eposMatch: epos ? epos.product : (eposName || "No match"),
+          source: supplier,
+        };
+      });
+
+      const result = calculateDecisions(matchedProducts, budget);
+      result.source = supplier;
+      result.promoDates = extracted[0]?.deal_notes || "";
+      result.budget = parseInt(budget) || 750;
+      result.keyInsight = `${result.lines.buy} products to buy, ${result.lines.test} to test from ${supplier}. ${result.totalSpend > 0 ? `Total spend £${result.totalSpend} (${result.budgetPct}% of budget).` : ""}`;
+
+      setResult(result);
+      setView("results");
+    } catch (e) {
+      console.error("Scan:", e);
+      setError(e.message || "Scan failed. Try a clearer photo.");
+    }
+    setScanning(false); setScanStep("");
   };
 
-  const handleCreate = async () => {
-    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    if (!id || id.length < 3) { setIdMsg("ID must be at least 3 characters"); return; }
-    if (pin.length !== 4) { setIdMsg("PIN must be 4 digits"); return; }
-    if (pin !== pinConfirm) { setIdMsg("PINs don't match"); return; }
-    setSaving(true); setIdMsg(null);
+  const save = async () => {
+    if (!result || !clientId) return; setSaving(true);
     try {
-      await claimOwnerId(id, inviteCode.trim().toUpperCase());
-      const client = await getOrCreateClient(id);
-      if (client) await setPin(client.id, pin);
-      saveOwnerId(id);
-      // Load data and authenticate
-      onAuthenticated(client.id, client.name || id);
-    } catch (e) {
-      const msg = e.message || "";
-      if (msg.includes("taken") || msg.includes("duplicate")) setIdMsg("That ID is taken — try something more specific");
-      else setIdMsg("Setup failed: " + msg);
-    }
+      await savePromoScan(clientId, result, result.decisions || [], result.skips || []);
+      const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]);
+      setHistory(s || []); setPriceHist(p || []); setView("menu"); setResult(null); setPhotos([]); setPreviews([]);
+    } catch (e) { setError("Save failed: " + e.message); }
     setSaving(false);
   };
 
-  const handleLogin = async () => {
-    const id = loginId.trim().toLowerCase();
-    if (!id) { setLoginMsg("Enter your business ID"); return; }
-    if (loginPin.length !== 4) { setLoginMsg("Enter your 4-digit PIN"); return; }
-    setLoggingIn(true); setLoginMsg(null);
-    try {
-      const client = await getOrCreateClient(id);
-      if (!client) { setLoginMsg("Business not found"); setLoggingIn(false); return; }
-      const valid = await verifyPin(client.id, loginPin);
-      if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
-      saveOwnerId(id);
-      onAuthenticated(client.id, client.name || id);
-    } catch (e) { setLoginMsg("Login failed: " + (e.message || "check connection")); }
-    setLoggingIn(false);
-  };
-
-  return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
-        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 4 }}>ShopMate Sales</div>
-        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>Owner Dashboard</div>
-
-        {/* ── LANDING ── */}
-        {mode === "landing" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button onClick={() => setMode("login")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: "none", background: C.accentLight, color: C.white, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-              Log In
-            </button>
-            <button onClick={() => setMode("setup-code")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, color: C.textSecondary, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
-              I have an invite code
-            </button>
-          </div>
-        )}
-
-        {/* ── LOGIN ── */}
-        {mode === "login" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Welcome back</div>
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
-            <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
-
-            {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
-
-            <button onClick={handleLogin} disabled={loggingIn || !loginId.trim() || loginPin.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: loginId.trim() && loginPin.length === 4 ? C.accentLight : C.surface, color: loginId.trim() && loginPin.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {loggingIn ? "Logging in..." : "Log In"}
-            </button>
-
-            <button onClick={() => { setMode("landing"); setLoginMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
-          </div>
-        )}
-
-        {/* ── SETUP: INVITE CODE ── */}
-        {mode === "setup-code" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 6 }}>Enter your invite code</div>
-            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.5 }}>Each code can only be used once to create one account.</div>
-            <input style={{ ...inp, textTransform: "uppercase", letterSpacing: 2, fontWeight: 700 }} value={inviteCode} onChange={e => { setInviteCode(e.target.value.toUpperCase()); setInviteMsg(null); }} onKeyDown={e => { if (e.key === "Enter") handleInvite(); }} placeholder="e.g. HORDEN-2026" autoFocus />
-            {inviteMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{inviteMsg}</div>}
-            <button onClick={handleInvite} disabled={checking || !inviteCode.trim()} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: inviteCode.trim() ? C.accentLight : C.surface, color: inviteCode.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {checking ? "Checking..." : "Continue →"}
-            </button>
-            <button onClick={() => { setMode("landing"); setInviteMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
-          </div>
-        )}
-
-        {/* ── SETUP: CHOOSE ID + PIN ── */}
-        {mode === "setup-id" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Create your account</div>
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
-            <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
-
-            {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
-
-            <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {saving ? "Creating..." : "Create Account →"}
-            </button>
-
-            <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
-          </div>
-        )}
-      </div>
-      <style>{globalCSS}</style>
-    </div>
-  );
-}
-
-export default function App() {
-  const [allDays, setAllDays] = useState([]);
-  const [activeSection, setActiveSection] = useState("dashboard");
-  const [activeTab, setActiveTab] = useState("home");
-  const [timeRange, setTimeRange] = useState("day");
-  const [clientId, setClientId] = useState(null);
-  const [clientName, setClientName] = useState("");
-  const [sbStatus, setSbStatus] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [authenticated, setAuthenticated] = useState(false);
-
-  // Called by AuthScreen when login/setup succeeds
-  const handleAuthenticated = async (cId, cName) => {
-    setClientId(cId); setClientName(cName); setAuthenticated(true);
-    setLoading(true);
-    try {
-      const days = await loadFromSupabase(cId);
-      if (days.length > 0) setAllDays(days);
-      setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
-    } catch (e) { setSbStatus("Error: " + e.message); }
-    setLoading(false);
-  };
-
-  const handleLogout = () => {
-    logout();
-    setAuthenticated(false); setClientId(null); setClientName("");
-    setAllDays([]); setActiveSection("dashboard"); setActiveTab("home");
-  };
-
-  const addDay = useCallback(async (data, uploadType, transactions) => {
-    if (clientId) {
-      setSbStatus("Saving...");
-      const result = await pushToSupabase(clientId, data, uploadType || "day", transactions);
-      if (result.ok) {
-        setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
-        const days = await loadFromSupabase(clientId); setAllDays(days);
-      } else { setSbStatus(`✗ ${result.error}`); }
-      setTimeout(() => setSbStatus(""), 4000);
+  const editDec = async (item, dec, notes) => {
+    if (item.id) {
+      await updatePromoDecision(item.id, { user_override: dec, user_notes: notes });
+      if (notes) await saveCorrection(clientId, item.product, "override", `${dec}: ${notes}`);
+      setSelDecs(p => p.map(d => d.id === item.id ? { ...d, user_override: dec, user_notes: notes } : d));
     } else {
-      setAllDays(prev => {
-        if (prev.find(d => d.dates?.start === data.dates?.start)) return prev.map(d => d.dates?.start === data.dates?.start ? data : d);
-        return [...prev, data].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
-      });
-    }
-    setActiveTab("home"); setActiveSection("dashboard");
-  }, [clientId]);
-
-  const refreshData = useCallback(async () => {
-    if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
-  }, [clientId]);
-
-  const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
-
-  // Available months from data
-  const availableMonths = useMemo(() => {
-    const months = {};
-    allDays.forEach(d => {
-      if (!d.dates?.start) return;
-      const m = d.dates.start.slice(0, 7); // "2026-03"
-      if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
-      months[m].days.push(d);
-    });
-    return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
-  }, [allDays]);
-
-  // Previous complete month key
-  const prevMonthKey = useMemo(() => {
-    const d = new Date(); d.setMonth(d.getMonth() - 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  }, []);
-
-  // Current range data — day/week/month logic
-  const currentDays = useMemo(() => {
-    if (!allDays.length) return [];
-    if (timeRange === "day") return [allDays[allDays.length - 1]];
-    if (timeRange === "week") return allDays.slice(-7);
-    // Month: use selected month or previous complete month
-    const mKey = selectedMonth || prevMonthKey;
-    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
-    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
-  }, [allDays, timeRange, selectedMonth, prevMonthKey]);
-
-  const currentData = useMemo(() => {
-    if (!currentDays.length) return null;
-    if (timeRange === "day") return currentDays[0];
-    return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
-  }, [currentDays, timeRange]);
-
-  // Previous period for WoW comparison
-  const prevWeekDays = useMemo(() => {
-    if (!allDays.length) return null;
-    if (timeRange === "day") {
-      // Day mode: return previous day as a single-element array
-      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
-    }
-    if (timeRange === "month") {
-      // Month mode: find the PREVIOUS calendar month's data
-      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
-      if (!currentMonthKey) return null;
-      const d = new Date(currentMonthKey + "-15");
-      d.setMonth(d.getMonth() - 1);
-      const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
-      return prevDays.length > 0 ? prevDays : null;
-    }
-    // Week mode: get the same number of days before
-    return getPrevWeekData(allDays, currentDays);
-  }, [allDays, currentDays, timeRange]);
-
-  const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
-  const isMultiDay = timeRange !== "day";
-  const isMonth = timeRange === "month";
-  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
-  const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
-  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
-
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-
-  // Not authenticated — show login/setup screen
-  if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
-
-  // Loading data after auth
-  if (loading) return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 28, marginBottom: 12 }}>📊</div>
-        <div style={{ fontSize: 15, color: C.white, fontWeight: 600 }}>Loading...</div>
-        <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Connecting to your business</div>
-      </div>
-      <style>{globalCSS}</style>
-    </div>
-  );
-
-  // No data — upload screen
-  if (!analysis) return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary }}>
-      <UploadScreen onDataLoaded={addDay} uploads={allDays} />
-      <style>{globalCSS}</style>
-    </div>
-  );
-
-  const { summary } = analysis;
-  const dateLabel = currentData.dates ? (timeRange === "day"
-    ? new Date(currentData.dates.start + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })
-    : `${allDays.length} days`) : "";
-
-  const handleSelectProduct = (product) => setSelectedProduct(product);
-
-  const renderSection = () => {
-    switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
-      case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
-      case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "topsellers": return <TopSellersSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "erosion": return <ErosionSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "missing": return <HiddenProfitSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "ops": return <OpsSection analysis={analysis} allDays={currentDays} />;
-      case "actions": return <ActionsSection analysis={analysis} />;
-      case "density": return <ShelfDensitySection analysis={analysis} />;
-      case "competitor": return <CompetitorPricingSection analysis={analysis} />;
-      case "clearshelf": return <ClearShelfSection analysis={analysis} />;
-      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
-      case "coming": return <ComingUpSection />;
-      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
-      case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      const i = result.decisions.findIndex(d => d.product === item.product);
+      if (i >= 0) { result.decisions[i].user_override = dec; result.decisions[i].user_notes = notes; setResult({ ...result }); }
     }
   };
 
-  return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, position: "relative", overflow: "hidden" }}>
-      <div style={{ position: "fixed", top: -150, right: -100, width: 400, height: 400, background: "radial-gradient(circle, rgba(46,80,144,0.15) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+  const viewHist = async (s) => { setSelScan(s); const [d, k] = await Promise.all([loadPromoDecisions(s.id), loadPromoSkips(s.id)]); setSelDecs(d || []); setSelSkips(k || []); setView("detail"); };
+  const delScan = async (id) => { if (!confirm("Are you sure you want to delete this scan?")) return; await deletePromoScan(id); setHistory(p => p.filter(s => s.id !== id)); setView("menu"); };
 
-      {/* Header */}
-      <div style={{ padding: "20px 20px 12px", position: "relative", zIndex: 1, background: "linear-gradient(180deg, rgba(46,80,144,0.08) 0%, transparent 100%)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 8, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 900, color: C.white }}>S</div>
-              <span style={{ fontSize: 16, fontWeight: 800, color: C.white, letterSpacing: 0.5 }}>ShopMate Sales</span>
-            </div>
-            <div style={{ fontSize: 14, color: C.textSecondary }}>{greeting}{clientName ? `, ${clientName}` : ""}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{dateLabel} · {allDays.length} day{allDays.length !== 1 ? "s" : ""}{sbStatus ? ` · ${sbStatus}` : ""}</div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-            <div style={{ padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: C.greenDim, color: C.greenText, border: "1px solid rgba(34,197,94,0.2)" }}>● LIVE</div>
-            <button onClick={() => setActiveTab("upload")} style={{ padding: "5px 12px", borderRadius: 8, background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Upload</button>
-          </div>
+  // ── MENU ──
+  if (view === "menu") return (
+    <SectionCard title="Promotions" icon="🎯" accent="rgba(34,197,94,0.06)">
+      {!ANTHROPIC_KEY ? <EmptyState msg="API key required in Vercel settings" /> : <>
+        <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>Upload supplier leaflet photos. AI reads every product and matches to your EPOS. All calculations done locally — velocity, cover, POR, budget are always accurate.</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: C.textMuted }}>Scans this week: {scansThisWeek}/{MAX_SCANS_PER_WEEK}</span>
+          {!canScan && <Badge type="LOW">LIMIT REACHED</Badge>}
         </div>
-
-        {/* Time toggle */}
-        <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
-          {timeRanges.map(tr => (
-            <button key={tr.id} onClick={() => setTimeRange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
-              {tr.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Month selector — only when in month mode */}
-        {isMonth && availableMonths.length > 0 && (
-          <div style={{ marginBottom: 12 }}>
-            <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
-              {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
-            </select>
-          </div>
-        )}
-
-        {/* Mini KPI bar */}
-        <div style={{ display: "flex", gap: 8, padding: "14px 16px", borderRadius: 12, background: `linear-gradient(135deg, ${C.card}, rgba(46,80,144,0.1))`, border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
-          <Stat label="Revenue" value={fi(summary.totalGross)} small />
-          <div style={{ width: 1, background: C.border }} />
-          <Stat label="Profit" value={fi(summary.trackedProfit)} small />
-          <div style={{ width: 1, background: C.border }} />
-          <Stat label="Margin" value={pct(summary.trackedMargin)} small />
-        </div>
-      </div>
-
-      {/* Nav pills */}
-      {activeTab === "home" && (
-        <div style={{ display: "flex", gap: 6, padding: "12px 20px", overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", position: "relative", zIndex: 1 }}>
-          {sectionList.map(s => (
-            <button key={s.id} onClick={() => setActiveSection(s.id)} style={{ padding: "7px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all 0.2s", background: activeSection === s.id ? C.accentLight : C.card, color: activeSection === s.id ? C.white : C.textMuted, boxShadow: activeSection === s.id ? "0 2px 12px rgba(59,111,212,0.3)" : "none" }}>
-              {s.icon} {s.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Content */}
-      <div style={{ padding: "8px 16px 100px", position: "relative", zIndex: 1 }}>
-        {activeTab === "home" && renderSection()}
-        {activeTab === "search" && <Search analysis={analysis} onSelectProduct={handleSelectProduct} />}
-        {activeTab === "grid" && (
-          <div style={{ padding: "8px 0" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: C.white, marginBottom: 16, paddingLeft: 4 }}>Sections</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {sectionGrid.map(s => (
-                <button key={s.id} onClick={() => { setActiveSection(s.id); setActiveTab("home"); }} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 14px", textAlign: "left", cursor: "pointer" }}>
-                  <span style={{ fontSize: 26, display: "block", marginBottom: 8 }}>{s.icon}</span>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 4 }}>{s.label}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.3 }}>{s.sub}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {activeTab === "news" && <NewsSection />}
-        {activeTab === "upload" && <UploadScreen onDataLoaded={addDay} uploads={allDays} onCancel={() => { setActiveTab("home"); setActiveSection("dashboard"); }} />}
-      </div>
-
-      {/* Bottom nav */}
-      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, zIndex: 10, background: `linear-gradient(180deg, transparent, ${C.bg} 20%)`, padding: "20px 16px 12px" }}>
-        <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "12px 0", borderRadius: 20, background: C.card, border: `1px solid ${C.border}`, boxShadow: "0 -4px 24px rgba(0,0,0,0.4)" }}>
-          {bottomNav.map(n => (
-            <button key={n.id} onClick={() => { setActiveTab(n.id); if (n.id === "home") setActiveSection("dashboard"); }} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, opacity: activeTab === n.id ? 1 : 0.5, transition: "opacity 0.2s" }}>
-              <span style={{ fontSize: n.id === "grid" ? 24 : 22 }}>{n.icon}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, color: activeTab === n.id ? C.accentLight : C.textMuted }}>{n.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Product Detail Overlay */}
-      {selectedProduct && (
-        <ProductDetail
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-          allDays={allDays}
-          currentDays={currentDays}
-          timeRange={rangeLabel}
-        />
-      )}
-
-      <style>{globalCSS}</style>
-    </div>
+        <button onClick={() => canScan ? setView("scan") : null} disabled={!canScan} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: canScan ? C.green : C.surface, color: canScan ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16, opacity: canScan ? 1 : 0.5 }}>📷 Scan New Leaflet</button>
+        {history.length > 0 && <>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Previous Scans</div>
+          {history.map((s, i) => <div key={i} onClick={() => viewHist(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}><div><div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{s.supplier}</div><div style={{ fontSize: 10, color: C.textMuted }}>{new Date(s.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {s.buy_count}B/{s.test_count}T · {fi(s.total_spend)}</div></div><span style={{ color: C.textMuted }}>›</span></div>)}
+        </>}
+      </>}
+    </SectionCard>
   );
+
+  // ── SCAN ──
+  if (view === "scan") return (
+    <SectionCard title="Scan Leaflet" icon="📷">
+      <button onClick={() => { setView("menu"); setPhotos([]); setPreviews([]); setError(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>Supplier Name</div>
+      <input type="text" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="e.g. Booker 1-Day Special, Parfetts..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 6 }} />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+        {QUICK_SUPPLIERS.map(s => <button key={s} onClick={() => setSupplier(s)} style={{ padding: "6px 10px", borderRadius: 8, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", background: supplier === s ? C.accentLight : C.surface, color: supplier === s ? C.white : C.textMuted }}>{s}</button>)}
+      </div>
+      <label style={{ display: "block", padding: "24px 16px", borderRadius: 12, border: `2px dashed ${C.border}`, background: C.surface, textAlign: "center", cursor: "pointer", marginBottom: 12 }}>
+        <input type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
+        <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Take photo or choose from library</div>
+      </label>
+      {previews.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>{previews.map((p, i) => <div key={i} style={{ position: "relative", width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}><img src={p} style={{ width: "100%", height: "100%", objectFit: "cover" }} /><button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>)}</div>}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Budget:</span>
+        <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}><span style={{ color: C.textMuted }}>£</span><input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} /></div>
+      </div>
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>📊 {Object.keys(velMap).length} products in EPOS · {(allDays || []).length} days of data</div>
+      {error && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.redDim, marginBottom: 12, fontSize: 12, color: C.redText }}>{error}</div>}
+      <button onClick={scan} disabled={scanning || !photos.length || !supplier.trim()} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: photos.length && supplier.trim() ? C.green : C.surface, color: photos.length && supplier.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", opacity: scanning ? 0.7 : 1 }}>
+        {scanning ? `🔍 ${scanStep}` : photos.length && supplier.trim() ? `🎯 Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}` : !supplier.trim() ? "Enter supplier name" : "Upload a photo"}
+      </button>
+    </SectionCard>
+  );
+
+  // ── RESULTS ──
+  if (view === "results" && result) {
+    const b = (result.decisions || []).filter(d => (d.user_override || d.decision) === "BUY");
+    const t = (result.decisions || []).filter(d => (d.user_override || d.decision) === "TEST");
+    const sk = result.skips || [];
+    return (<>
+      <SectionCard title="Promotion Forensic" icon="🎯" accent="rgba(34,197,94,0.06)">
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><Mini label="Budget" value={fi(result.budget || budget)} /><Mini label="Spent" value={fi(result.totalSpend || 0)} color={C.white} /><Mini label="ROI" value={`${result.roi || 0}%`} color={C.greenText} /><Mini label="Lines" value={`${b.length}B / ${t.length}T`} /></div>
+        {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
+        {result.keyInsight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14 }}><div style={{ fontSize: 10, color: C.accentLight, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Summary</div><div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{result.keyInsight}</div></div>}
+        {b.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, textTransform: "uppercase", marginBottom: 8 }}>✅ Buy ({b.length})</div>{b.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
+        {t.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🔶 Test ({t.length})</div>{t.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
+        {result.totalSpend > 0 && <div style={{ marginTop: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 4 }}><span>Budget</span><span>{result.budgetPct}%</span></div><div style={{ height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, result.budgetPct)}%`, background: C.green, borderRadius: 3 }} /></div><div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>{f(result.remaining)} remaining</div></div>}
+      </SectionCard>
+      {sk.length > 0 && <SectionCard title="Skipped" icon="🚫">{sk.map((s, i) => <div key={i} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim }}><div style={{ fontSize: 11, color: C.white }}>{s.product}</div><div style={{ fontSize: 10, color: C.textMuted }}>{s.reason}</div></div>)}</SectionCard>}
+      <div style={{ padding: "0 16px 20px", display: "flex", gap: 8 }}>
+        <button onClick={save} disabled={saving} style={{ flex: 1, padding: 14, borderRadius: 12, border: "none", background: C.green, color: C.white, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{saving ? "Saving..." : "💾 Save"}</button>
+        <button onClick={() => { setView("scan"); setResult(null); }} style={{ padding: "14px 20px", borderRadius: 12, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Rescan</button>
+      </div>
+    </>);
+  }
+
+  // ── HISTORY DETAIL ──
+  if (view === "detail" && selScan) {
+    const b = selDecs.filter(d => (d.user_override || d.decision) === "BUY");
+    const t = selDecs.filter(d => (d.user_override || d.decision) === "TEST");
+    return (<>
+      <SectionCard title={selScan.supplier} icon="🎯">
+        <button onClick={() => setView("menu")} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
+        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>{new Date(selScan.created_at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long" })}</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><Mini label="Spent" value={fi(selScan.total_spend)} /><Mini label="ROI" value={`${selScan.roi}%`} color={C.greenText} /><Mini label="Lines" value={`${selScan.buy_count}B/${selScan.test_count}T`} /></div>
+        {selScan.key_insight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14, fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{selScan.key_insight}</div>}
+        {b.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, textTransform: "uppercase", marginBottom: 8 }}>✅ Buy ({b.length})</div>{b.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
+        {t.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🔶 Test ({t.length})</div>{t.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
+        {selSkips.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.redText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🚫 Skipped ({selSkips.length})</div>{selSkips.map((s, i) => <div key={i} style={{ padding: "6px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim, fontSize: 11 }}><span style={{ color: C.white }}>{s.product}</span> — <span style={{ color: C.textMuted }}>{s.reason}</span></div>)}</>}
+      </SectionCard>
+      <div style={{ padding: "0 16px 20px" }}><button onClick={() => delScan(selScan.id)} style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑️ Delete Scan</button></div>
+    </>);
+  }
+
+  return <SectionCard title="Promotions" icon="🎯"><EmptyState msg="Loading..." /></SectionCard>;
 }
