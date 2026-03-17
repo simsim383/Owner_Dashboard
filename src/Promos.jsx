@@ -366,65 +366,134 @@ function PromoRow({ item, onEdit, priceHistory }) {
 // Shows products JS couldn't confidently match. User picks correct
 // EPOS line from a scored shortlist, then calculation runs.
 // ═══════════════════════════════════════════════════════════════════
-function ReviewScreen({ items, onConfirm }) {
+// Per-item sub-component so each search field has isolated state
+function ReviewItem({ item, index, selection, onPick, velMap }) {
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery]           = useState("");
+
+  // Live search against velMap as user types
+  const searchResults = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (q.length < 2) return [];
+    return Object.values(velMap)
+      .filter(v => v.product.toLowerCase().includes(q))
+      .sort((a, b) => b.blended - a.blended)
+      .slice(0, 8);
+  }, [query, velMap]);
+
+  const isTypedSelection = selection && !item.candidates.some(c => c.epos === selection);
+
+  return (
+    <div style={{ marginBottom: 20, padding: 14, borderRadius: 12, background: C.surface, border: `1px solid ${selection !== undefined ? "rgba(34,197,94,0.3)" : C.border}` }}>
+
+      {/* Leaflet product header */}
+      <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>On leaflet</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{item.product_name}</div>
+        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>
+          {item.case_format} · {item.rrp} · Case £{Number(item.case_price).toFixed(2)} ex VAT
+        </div>
+      </div>
+
+      <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Which EPOS product is this?</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+
+        {/* Scored candidates */}
+        {item.candidates.map(({ epos, score }, j) => {
+          const isSelected = selection === epos;
+          const strength   = score >= 5 ? "Strong" : score >= 3 ? "Good" : score >= 0 ? "Weak" : "Poor";
+          const strColor   = score >= 5 ? C.greenText : score >= 3 ? C.orangeText : C.textMuted;
+          return (
+            <button key={j} onClick={() => { onPick(epos); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${isSelected ? "rgba(34,197,94,0.6)" : C.border}`, background: isSelected ? "rgba(34,197,94,0.1)" : C.bg, cursor: "pointer", textAlign: "left" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{epos.product}</div>
+                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{epos.weeklyVel}/wk (7d) · {epos.monthlyAvg}/wk (mo) · {epos.yearlyAvg}/wk (yr)</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
+                <div style={{ fontSize: 10, color: strColor, fontWeight: 600 }}>{strength}</div>
+                {isSelected && <div style={{ width: 18, height: 18, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: C.white }}>✓</div>}
+              </div>
+            </button>
+          );
+        })}
+
+        {/* Typed search option */}
+        {!searchOpen ? (
+          <button onClick={() => setSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${isTypedSelection ? "rgba(34,197,94,0.6)" : C.border}`, background: isTypedSelection ? "rgba(34,197,94,0.1)" : C.bg, cursor: "pointer" }}>
+            <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${isTypedSelection ? C.green : C.border}`, background: isTypedSelection ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
+              {isTypedSelection ? "✓" : "+"}
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: isTypedSelection ? C.greenText : C.textMuted }}>
+                {isTypedSelection ? selection.product : "Search EPOS manually"}
+              </div>
+              {isTypedSelection && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>{selection.weeklyVel}/wk (7d) · {selection.monthlyAvg}/wk (mo) · {selection.yearlyAvg}/wk (yr)</div>}
+              {!isTypedSelection && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Not in suggestions? Type to search all EPOS products</div>}
+            </div>
+          </button>
+        ) : (
+          <div style={{ padding: 10, borderRadius: 9, border: `1.5px solid ${C.accentLight}`, background: "rgba(59,111,212,0.06)" }}>
+            <input
+              autoFocus
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Type product name e.g. Smirnoff Ice..."
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 12, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8 }}
+            />
+            {query.length >= 2 && searchResults.length === 0 && (
+              <div style={{ fontSize: 11, color: C.textMuted, padding: "6px 4px" }}>No EPOS products found for "{query}"</div>
+            )}
+            {searchResults.map((epos, k) => (
+              <button key={k} onClick={() => { onPick(epos); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "9px 10px", marginBottom: 4, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", textAlign: "left" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{epos.product}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>{epos.weeklyVel}/wk (7d) · {epos.monthlyAvg}/wk (mo) · {epos.yearlyAvg}/wk (yr)</div>
+                </div>
+                <div style={{ fontSize: 10, color: C.accentLight, fontWeight: 600, marginLeft: 8, flexShrink: 0 }}>Select</div>
+              </button>
+            ))}
+            <button onClick={() => { setSearchOpen(false); setQuery(""); }} style={{ fontSize: 11, color: C.textMuted, background: "none", border: "none", cursor: "pointer", padding: "4px 0" }}>Cancel</button>
+          </div>
+        )}
+
+        {/* Not in EPOS option */}
+        <button onClick={() => { onPick(null); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${selection === null ? "rgba(239,68,68,0.5)" : C.border}`, background: selection === null ? "rgba(239,68,68,0.08)" : C.bg, cursor: "pointer" }}>
+          <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${selection === null ? C.red : C.border}`, background: selection === null ? C.red : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
+            {selection === null ? "✓" : ""}
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: selection === null ? C.redText : C.textMuted }}>Not in EPOS</div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Treat as new product — TEST 1 case if POR is good</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewScreen({ items, onConfirm, velMap }) {
   const [selections, setSelections] = useState(() => items.map(() => undefined));
   const allAnswered = selections.every(s => s !== undefined);
+  const remaining   = selections.filter(s => s === undefined).length;
 
   const pick = (i, epos) => setSelections(prev => { const n = [...prev]; n[i] = epos; return n; });
 
   return (
     <SectionCard title="Confirm Matches" icon="🔍" accent="rgba(245,158,11,0.06)">
       <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>
-        {items.length} product{items.length !== 1 ? "s" : ""} could not be matched automatically. Pick the correct EPOS product for each one, or mark as "Not in EPOS".
+        {items.length} product{items.length !== 1 ? "s" : ""} could not be matched automatically. Pick the correct EPOS product for each one, search manually, or mark as "Not in EPOS".
       </div>
 
       {items.map((item, i) => (
-        <div key={i} style={{ marginBottom: 20, padding: 14, borderRadius: 12, background: C.surface, border: `1px solid ${selections[i] !== undefined ? "rgba(34,197,94,0.3)" : C.border}` }}>
-
-          {/* What was on the leaflet */}
-          <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>On leaflet</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{item.product_name}</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>
-              {item.case_format} · {item.rrp} · Case £{Number(item.case_price).toFixed(2)} ex VAT
-            </div>
-          </div>
-
-          {/* Candidate options from EPOS */}
-          <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Which EPOS product is this?</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {item.candidates.map(({ epos, score }, j) => {
-              const isSelected = selections[i] === epos;
-              const strength   = score >= 5 ? "Strong match" : score >= 3 ? "Good match" : score >= 0 ? "Weak match" : "Poor match";
-              const strColor   = score >= 5 ? C.greenText : score >= 3 ? C.orangeText : C.textMuted;
-              return (
-                <button key={j} onClick={() => pick(i, epos)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${isSelected ? "rgba(34,197,94,0.6)" : C.border}`, background: isSelected ? "rgba(34,197,94,0.1)" : C.bg, cursor: "pointer", textAlign: "left" }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{epos.product}</div>
-                    <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
-                      {epos.weeklyVel}/wk (7d) · {epos.monthlyAvg}/wk (mo) · {epos.yearlyAvg}/wk (yr)
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-                    <div style={{ fontSize: 10, color: strColor, fontWeight: 600, whiteSpace: "nowrap" }}>{strength}</div>
-                    {isSelected && <div style={{ width: 18, height: 18, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: C.white, flexShrink: 0 }}>✓</div>}
-                  </div>
-                </button>
-              );
-            })}
-
-            {/* Not in EPOS option */}
-            <button onClick={() => pick(i, null)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${selections[i] === null ? "rgba(239,68,68,0.5)" : C.border}`, background: selections[i] === null ? "rgba(239,68,68,0.08)" : C.bg, cursor: "pointer" }}>
-              <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${selections[i] === null ? C.red : C.border}`, background: selections[i] === null ? C.red : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
-                {selections[i] === null ? "✓" : ""}
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: selections[i] === null ? C.redText : C.textMuted }}>Not in EPOS</div>
-                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Treat as new product — TEST 1 case if POR is good</div>
-              </div>
-            </button>
-          </div>
-        </div>
+        <ReviewItem
+          key={i}
+          item={item}
+          index={i}
+          selection={selections[i]}
+          onPick={(epos) => pick(i, epos)}
+          velMap={velMap}
+        />
       ))}
 
       <button
@@ -432,7 +501,7 @@ function ReviewScreen({ items, onConfirm }) {
         disabled={!allAnswered}
         style={{ width: "100%", padding: 16, borderRadius: 12, border: "none", background: allAnswered ? C.green : C.surface, color: allAnswered ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: allAnswered ? "pointer" : "default" }}
       >
-        {allAnswered ? "Confirm & Calculate Order List" : `${items.filter((_, i) => selections[i] === undefined).length} product${items.filter((_, i) => selections[i] === undefined).length !== 1 ? "s" : ""} still to confirm`}
+        {allAnswered ? "Confirm & Calculate Order List" : `${remaining} product${remaining !== 1 ? "s" : ""} still to confirm`}
       </button>
     </SectionCard>
   );
@@ -704,7 +773,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
           </div>
         </div>
       )}
-      <ReviewScreen items={pendingAmbiguous} onConfirm={onReviewConfirm} />
+      <ReviewScreen items={pendingAmbiguous} onConfirm={onReviewConfirm} velMap={velMap} />
     </div>
   );
 
