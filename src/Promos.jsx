@@ -1,12 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════
-// PROMOS v4 — JS calculates everything, AI reads images + matches only
+// PROMOS v5 — JS calculates everything, AI reads images + matches only
+// Fixes: 3-window velocity, one-off detection, variant matching,
+//        pack structure validator, cover floors, Strategy A fallback only
 // ═══════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from "react";
 import { C, SectionCard, Badge, EmptyState, fi, f } from "./components.jsx";
 import { ANTHROPIC_KEY, AI_HDR } from "./config.js";
 import { savePromoScan, loadPromoScans, loadPromoDecisions, loadPromoSkips, loadAllPriceHistory, updatePromoDecision, deletePromoScan, saveCorrection } from "./supabase.js";
 
-const MAX_SCANS_PER_WEEK = 100;
+const MAX_SCANS_PER_WEEK = 999;
 const QUICK_SUPPLIERS = ["Booker 1DS", "Booker 2DS", "Booker 5DS", "Booker RTE", "Costco", "Parfetts", "United Wholesale"];
 
 // ═══════════════════════════════════════════════════════════════════
@@ -16,8 +18,8 @@ function buildVelocityMap(allDays) {
   if (!allDays || !allDays.length) return {};
   const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
 
-  const last7 = sorted.slice(-7);
-  const last28 = sorted.slice(-28);
+  const last7   = sorted.slice(-7);
+  const last28  = sorted.slice(-28);
   const allTime = sorted;
 
   const agg = (days) => {
@@ -31,9 +33,9 @@ function buildVelocityMap(allDays) {
     return map;
   };
 
-  const weekMap = agg(last7);
+  const weekMap  = agg(last7);
   const monthMap = agg(last28);
-  const yearMap = agg(allTime);
+  const yearMap  = agg(allTime);
 
   const allKeys = new Set([...Object.keys(weekMap), ...Object.keys(monthMap), ...Object.keys(yearMap)]);
   const result = {};
@@ -43,9 +45,9 @@ function buildVelocityMap(allDays) {
     const m = monthMap[key];
     const y = yearMap[key];
 
-    const weeklyVel = w ? w.qty : 0;
+    const weeklyVel  = w ? w.qty : 0;
     const monthlyAvg = m ? Math.round((m.qty / Math.max(1, last28.length / 7)) * 10) / 10 : 0;
-    const yearlyAvg = y ? Math.round((y.qty / Math.max(1, allTime.length / 7)) * 10) / 10 : 0;
+    const yearlyAvg  = y ? Math.round((y.qty / Math.max(1, allTime.length / 7)) * 10) / 10 : 0;
 
     // ONE-OFF DETECTION: high last week but near-zero all-time = one-off purchase
     const isOneOff = weeklyVel >= 3 && yearlyAvg < 0.5;
@@ -64,10 +66,10 @@ function buildVelocityMap(allDays) {
       blended = Math.round(((weeklyVel * 0.4) + (monthlyAvg * 0.35) + (yearlyAvg * 0.25)) * 10) / 10;
     }
 
-    const base = w || m || y;
-    const totalQty = (m || y)?.qty || 1;
+    const base       = w || m || y;
+    const totalQty   = (m || y)?.qty || 1;
     const totalGross = (m || y)?.gross || 0;
-    const sellPrice = Math.round((totalGross / totalQty) * 100) / 100;
+    const sellPrice  = Math.round((totalGross / totalQty) * 100) / 100;
 
     result[key] = {
       product: base.product, barcode: base.barcode, category: base.category,
@@ -78,48 +80,75 @@ function buildVelocityMap(allDays) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MATCHING ENGINE — finds EPOS match, strict brand validation
+// MATCHING ENGINE — variant-aware, brand + PM + flavour validated
 // ═══════════════════════════════════════════════════════════════════
+const VARIANT_KEYWORDS = [
+  "cherry", "zero", "diet", "max", "original", "sugar free", "light",
+  "orange", "lemon", "lime", "raspberry", "strawberry", "tropical",
+  "mint", "menthol", "dark fruit", "pear", "apple", "berry",
+  "gold", "silver", "black", "white", "red", "blue",
+  "extra cold", "smooth", "extra", "classic", "premium",
+];
+
 function findEposMatch(leafletProduct, eposMatch, velMap) {
   if (!eposMatch || eposMatch === "null" || eposMatch === "No match") return null;
   const search = eposMatch.toLowerCase().trim();
-  
+
   // Direct key match
   if (velMap[search]) return velMap[search];
-  
+
   // Exact product name match
   for (const v of Object.values(velMap)) {
     if (v.product.toLowerCase() === search) return v;
   }
-  
-  // Close match — but validate the BRAND matches
-  // Extract first word (brand) from both the leaflet product and the EPOS match
-  const leafletBrand = (leafletProduct || "").toLowerCase().split(/[\s\/]+/)[0];
+
+  // Build required variant list from both the promo name and the AI match string
+  const searchVariants  = VARIANT_KEYWORDS.filter(kw => search.includes(kw));
+  const leafletVariants = VARIANT_KEYWORDS.filter(kw => (leafletProduct || "").toLowerCase().includes(kw));
+  // Use whichever source is more specific
+  const requiredVariants = searchVariants.length >= leafletVariants.length ? searchVariants : leafletVariants;
+
   const matchBrand = search.split(/[\s\/]+/)[0];
-  
+
   for (const v of Object.values(velMap)) {
-    const eposBrand = v.product.toLowerCase().split(/[\s\/]+/)[0];
-    const eposName = v.product.toLowerCase();
-    
-    // Product name contains the search term — but brands must agree
-    if (eposName.includes(search) && eposBrand === matchBrand) return v;
-    if (search.includes(eposName) && eposName.length > 5 && eposBrand === matchBrand) return v;
+    const eposName  = v.product.toLowerCase();
+    const eposBrand = eposName.split(/[\s\/]+/)[0];
+
+    // Brand must match
+    if (eposBrand !== matchBrand) continue;
+
+    // ALL required variant keywords must be present in the EPOS name
+    if (requiredVariants.length > 0) {
+      if (!requiredVariants.every(kw => eposName.includes(kw))) continue;
+    }
+
+    // If promo has NO variant keywords, reject EPOS names that DO have them
+    // (prevents "Dr Pepper Original" matching "Dr Pepper Cherry")
+    if (requiredVariants.length === 0) {
+      const eposHasVariant  = VARIANT_KEYWORDS.some(kw => eposName.includes(kw));
+      const promoHasVariant = VARIANT_KEYWORDS.some(kw => (leafletProduct || "").toLowerCase().includes(kw));
+      if (eposHasVariant && !promoHasVariant) continue;
+    }
+
+    if (eposName.includes(search) || search.includes(eposName)) return v;
   }
-  
-  // Last resort: search contains significant part of EPOS name, brands match
+
+  // Last resort: brand + all variant keywords match + at least 2 common words
   for (const v of Object.values(velMap)) {
-    const eposWords = v.product.toLowerCase().split(/\s+/);
+    const eposName  = v.product.toLowerCase();
+    const eposWords = eposName.split(/\s+/);
     const searchWords = search.split(/\s+/);
-    // At least 2 words must match and first word (brand) must match
+    if (eposWords[0] !== matchBrand) continue;
+    if (requiredVariants.length > 0 && !requiredVariants.every(kw => eposName.includes(kw))) continue;
     const commonWords = eposWords.filter(w => searchWords.some(sw => sw.includes(w) || w.includes(sw)));
-    if (commonWords.length >= 2 && eposWords[0] === searchWords[0]) return v;
+    if (commonWords.length >= 2) return v;
   }
-  
-  return null; // No confident match — better to return null than wrong product
+
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// PACK STRUCTURE VALIDATOR — overrides AI's units_per_case (Fix 3)
+// PACK STRUCTURE VALIDATOR — overrides AI's units_per_case
 // ═══════════════════════════════════════════════════════════════════
 function parseUnitsPerCase(caseFormat, aiValue) {
   if (!caseFormat) return aiValue || 1;
@@ -129,8 +158,8 @@ function parseUnitsPerCase(caseFormat, aiValue) {
   // "12x500ml", "24x250ml", "6x75cl" → first number = individual units
   const single = caseFormat.match(/^(\d+)x/i);
   if (single) return parseInt(single[1]);
-  // "1x70cl" or just "70cl" = single bottle (spirits)
-  if (/^\d*x?[\d.]+(cl|ml)/i.test(caseFormat) && !caseFormat.includes('x')) return 1;
+  // "70cl" / "1ltr" with no multiplier = single bottle (spirits)
+  if (/^\d*x?[\d.]+(cl|ml|ltr)/i.test(caseFormat) && !caseFormat.includes("x")) return 1;
   return aiValue || 1;
 }
 
@@ -138,22 +167,22 @@ function parseUnitsPerCase(caseFormat, aiValue) {
 // DECISION ENGINE — correct thresholds, cover rules, one-off guard
 // ═══════════════════════════════════════════════════════════════════
 function calculateDecisions(matchedProducts, budget) {
-  const decisions = [];
-  const skips = [];
-  let totalSpend = 0;
-  const COVER_MIN = 3;
-  const COVER_MAX = 10;
-  const FAST_VEL = 10;
+  const decisions  = [];
+  const skips      = [];
+  let totalSpend   = 0;
+  const COVER_MIN  = 3;
+  const COVER_MAX  = 10;
+  const FAST_VEL   = 10;
 
   matchedProducts.forEach(item => {
     const { product_name, case_price, case_format, rrp_num, epos, eposMatch } = item;
-    const vel = epos ? epos.blended : 0;
-    const cp = Number(case_price) || 0;
-    const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1);
-    const rrp = Number(rrp_num) || 0;
+    const vel  = epos ? epos.blended : 0;
+    const cp   = Number(case_price) || 0;
+    const upc  = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1);
+    const rrp  = Number(rrp_num) || 0;
 
     // POR calculation
-    const costPerUnitExVat = upc > 0 ? cp / upc : cp;
+    const costPerUnitExVat  = upc > 0 ? cp / upc : cp;
     const costPerUnitIncVat = costPerUnitExVat * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
 
@@ -162,16 +191,16 @@ function calculateDecisions(matchedProducts, budget) {
       casePrice: cp, por, rrp: item.rrp || "", upc,
     };
 
-    // ONE-OFF GUARD
-    const isOneOff = epos?.isOneOff || false;
+    const isOneOff  = epos?.isOneOff || false;
     const yearlyAvg = epos?.yearlyAvg || 0;
 
+    // ONE-OFF GUARD
     if (isOneOff) {
       skips.push({ product: product_name, reason: `One-off purchase — ${epos.weeklyVel}/wk last week but only ${yearlyAvg.toFixed(1)}/wk yearly avg. Not a real seller.` });
       return;
     }
 
-    // ZERO VELOCITY — no sales at all
+    // ZERO VELOCITY — no sales in any period
     if (vel === 0 && yearlyAvg === 0) {
       if (cp > 0 && por >= 20) {
         const totalInc = Math.round(cp * 1.2 * 100) / 100;
@@ -184,7 +213,7 @@ function calculateDecisions(matchedProducts, budget) {
       return;
     }
 
-    // LOW VELOCITY — vel < 1 AND yearly < 1
+    // LOW VELOCITY — blended < 1 AND yearly < 1
     if (vel < 1 && yearlyAvg < 1) {
       if (por >= 20) {
         const totalInc = Math.round(cp * 1.2 * 100) / 100;
@@ -200,10 +229,10 @@ function calculateDecisions(matchedProducts, budget) {
     // BUY — calculate cover with correct rules
     let targetWeeks;
     if (vel >= FAST_VEL) targetWeeks = 8;
-    else if (vel >= 4) targetWeeks = 6;
-    else targetWeeks = 4;
+    else if (vel >= 4)   targetWeeks = 6;
+    else                 targetWeeks = 4;
 
-    let qty = Math.ceil((vel * targetWeeks) / upc);
+    let qty        = Math.ceil((vel * targetWeeks) / upc);
     if (qty < 1) qty = 1;
     let coverWeeks = (qty * upc) / vel;
 
@@ -215,14 +244,14 @@ function calculateDecisions(matchedProducts, budget) {
 
     // Enforce floor (fast movers min 4wk, others min 3wk)
     const coverFloor = vel >= FAST_VEL ? 4 : COVER_MIN;
-    while (coverWeeks < coverFloor && coverWeeks < COVER_MAX) {
+    while (coverWeeks < coverFloor) {
       qty++;
       coverWeeks = (qty * upc) / vel;
       if (coverWeeks > COVER_MAX) { qty--; coverWeeks = (qty * upc) / vel; break; }
     }
 
     coverWeeks = Math.round(coverWeeks);
-    const totalInc = Math.round(cp * qty * 1.2 * 100) / 100;
+    const totalInc   = Math.round(cp * qty * 1.2 * 100) / 100;
     const totalUnits = qty * upc;
 
     decisions.push({
@@ -233,18 +262,18 @@ function calculateDecisions(matchedProducts, budget) {
     totalSpend += totalInc;
   });
 
-  // Budget rebalance — Fix 5: use stored upc, not recalculated
-  const budgetNum = Number(budget) || 750;
-  const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
+  // Budget rebalance — reduce slowest movers if over budget
+  const budgetNum  = Number(budget) || 750;
+  const buyItems   = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
   while (totalSpend > budgetNum * 1.05 && buyItems.length > 0) {
     const slowest = buyItems[0];
     if (slowest.qty > 1) {
       slowest.qty--;
-      slowest.units = slowest.qty * slowest.upc;
+      slowest.units    = slowest.qty * slowest.upc;
       slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
-      slowest.cover = `~${Math.round(slowest.units / slowest.vel)}wk`;
-      slowest.notes += " [Reduced for budget]";
-      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      slowest.cover    = `~${Math.round(slowest.units / slowest.vel)}wk`;
+      slowest.notes   += " [Reduced for budget]";
+      totalSpend       = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
     } else {
       buyItems.shift();
     }
@@ -257,11 +286,11 @@ function calculateDecisions(matchedProducts, budget) {
     const newCover = ((fast.qty + 1) * fast.upc) / fast.vel;
     if (newCover <= COVER_MAX) {
       fast.qty++;
-      fast.units = fast.qty * fast.upc;
+      fast.units    = fast.qty * fast.upc;
       fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
-      fast.cover = `~${Math.round(newCover)}wk`;
-      fast.notes += " [Increased — budget available]";
-      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      fast.cover    = `~${Math.round(newCover)}wk`;
+      fast.notes   += " [Increased — budget available]";
+      totalSpend    = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
     }
   }
 
@@ -270,16 +299,20 @@ function calculateDecisions(matchedProducts, budget) {
     return s + (rrpNum * (d.units || 0));
   }, 0);
   const estProfit = Math.round((estRevenue - totalSpend) * 100) / 100;
-  const roi = totalSpend > 0 ? Math.round((estProfit / totalSpend) * 1000) / 10 : 0;
+  const roi       = totalSpend > 0 ? Math.round((estProfit / totalSpend) * 1000) / 10 : 0;
 
   return {
     decisions, skips,
-    totalSpend: Math.round(totalSpend * 100) / 100,
-    remaining: Math.round((budgetNum - totalSpend) * 100) / 100,
-    budgetPct: Math.round((totalSpend / budgetNum) * 1000) / 10,
-    estRevenue: Math.round(estRevenue * 100) / 100,
+    totalSpend:  Math.round(totalSpend * 100) / 100,
+    remaining:   Math.round((budgetNum - totalSpend) * 100) / 100,
+    budgetPct:   Math.round((totalSpend / budgetNum) * 1000) / 10,
+    estRevenue:  Math.round(estRevenue * 100) / 100,
     estProfit, roi,
-    lines: { buy: decisions.filter(d => d.decision === "BUY").length, test: decisions.filter(d => d.decision === "TEST").length, skip: skips.length },
+    lines: {
+      buy:  decisions.filter(d => d.decision === "BUY").length,
+      test: decisions.filter(d => d.decision === "TEST").length,
+      skip: skips.length,
+    },
   };
 }
 
@@ -290,63 +323,83 @@ function step1Prompt(supplier) {
   return `Read this wholesale promotion leaflet from ${supplier}. Extract EVERY product shown.
 
 For each product return:
-- product_name: Full name with brand, variant, size (e.g. "Pepsi Max Original/Cherry 12x500ml PM£1.39")
+- product_name: Full name with brand, variant, size (e.g. "Dr Pepper Cherry 12x500ml PM£1.40")
 - case_format: e.g. "12x500ml", "6x4x568ml", "24x250ml", "6x2ltr"
 - case_price: The WHOLESALE CASE PRICE (ex VAT). The big price labelled WSP. NOT the retail price.
-- rrp: The retail/PM price per unit (e.g. "PM£1.39", "PM£7.99", "RRP£1.99")
+- rrp: The retail/PM price per unit (e.g. "PM£1.40", "PM£7.99", "RRP£1.99")
 - units_per_case: Sellable units. 6x4x568ml=6 packs. 12x500ml=12. 24x250ml=24. 6x2ltr=6. 6x70cl=6. 10x100g=10.
 - deal_notes: Any special offers ("Buy 3 for £13", "Was £8.39")
 
 CRITICAL:
 - case_price is for ONE CASE not per unit. "WSP: £5.99" = £5.99 for the whole case.
-- If a product name has "/" it means BOTH varieties in one case. "Hardy's Chardonnay/Merlot" = case contains both Chardonnay AND Merlot bottles. List it as ONE product with the full name including both.
+- Include the FULL variant name in product_name. "Dr Pepper Cherry" not just "Dr Pepper". "Pepsi Max" not just "Pepsi".
+- If a product name has "/" it means BOTH varieties in one case. List as ONE product with full name including both.
 - Read prices EXACTLY as printed. Do not calculate or infer.
 
 RESPOND with ONLY a JSON array: [{"product_name":"","case_format":"","case_price":0,"rrp":"","units_per_case":0,"deal_notes":""}]`;
 }
 
 function step2Prompt(extractedProducts, eposNames) {
-  return `Match each promotion product to the EXACT correct EPOS product name from the store's till system.
+  return `You are matching wholesale promotion products to EPOS till system product names.
+This is a convenience store in the north east of England (Londis).
 
 PROMOTION PRODUCTS TO MATCH:
-${extractedProducts.map((p, i) => `${i + 1}. ${p.product_name} (${p.case_format}, PM/RRP: ${p.rrp})`).join("\n")}
+${extractedProducts.map((p, i) => `${i + 1}. ${p.product_name} | Format: ${p.case_format} | PM/RRP: ${p.rrp}`).join("\n")}
 
-EPOS PRODUCT NAMES (the ONLY valid matches — do not invent names):
+EPOS PRODUCT NAMES (ONLY valid matches — do not invent names, do not modify spelling):
 ${eposNames.join("\n")}
 
-STRICT MATCHING RULES:
-1. Match by BRAND + PM code + SIZE. "Pepsi Max 12x500ml PM£1.39" → find an EPOS name with "Pepsi" AND ("Pm139" or "Pet 500"). NOT "Pepsi Max Pm219" (wrong size).
-2. "/" in promo names means BOTH variants: "Hardy's Chardonnay/Merlot" → search for "Hardys" + "Chardonnay" in EPOS. Return that match. Also note if Merlot exists separately.
-3. BRAND MUST MATCH. "I Heart Prosecco" can ONLY match an EPOS name containing "Heart" or "Prosecco". It CANNOT match "Hardys" or "Chardonnay" — those are different products entirely.
-4. "K Cider" can ONLY match an EPOS name containing "K Cider" or "Knights". It CANNOT match "Heineken" or "Fosters" or any other brand.
-5. "Smirnoff" can ONLY match EPOS names containing "Smirnoff". Check PM code too — Pm1759 ≠ Pm2359.
-6. If NO EPOS name matches the brand + format, return null. Do NOT pick the nearest unrelated product.
-7. Return the EXACT EPOS name string from the list above, spelled exactly as shown.
-8. SPIRITS: If the promo shows a single bottle (e.g. "Smirnoff 70cl £14.99") with no case format multiplier, units_per_case = 1. Do not assume a case of 6.
-9. PM MATCHING: If the promo PM price (e.g. PM£6.59) converts to a code (Pm659) that EXISTS in the EPOS list, that IS a valid match — return it. Only return null if the PM code genuinely does not appear in ANY EPOS name for that brand. Example: promo "Heineken PM£6.59" → look for "Pm659" in EPOS → found "Heineken Pm659" → MATCH.
-10. NEVER sum multiple EPOS variants to create a combined velocity. "Pepsi Max Pm139" and "Pepsi Max Pm219" are DIFFERENT products. Match to ONE specific EPOS line only.
-11. "/" in product names (e.g. "Chardonnay/Merlot") means one MIXED CASE containing both. Match to the PRIMARY variant (first named) in EPOS. Note if secondary variant exists separately.
+HOW TO MATCH — follow these steps for EVERY product:
 
-CRITICAL: It is MUCH better to return null (no match) than to match to the wrong product. A wrong match causes the store to over-order products they don't sell.
+STEP A: Build a search string from the promo
+- Take the brand (e.g. "Dr Pepper")
+- Take the PM price digits (e.g. PM£1.40 → "Pm140" or "Pm1.40")
+- Take the variant/flavour (e.g. "Cherry", "Zero", "Original", "Dark Fruit")
+- Example: "Dr Pepper Cherry 12x500ml PM£1.40" → search for EPOS name with "Dr Pepper" AND "Cherry" AND "Pm140"
 
-RESPOND with ONLY a JSON array (same order as promotion products):
-[{"promo_index":0,"epos_match":"exact EPOS name or null","match_notes":"why matched or why no match found"}]`;
+STEP B: Find the EPOS name that matches ALL three (brand + variant + PM code)
+- "Dr Pepper Zero Cherry Pm140" ✓ matches brand + cherry + pm140
+- "Dr Pepper Pm140" ✗ wrong — missing Cherry variant
+- "Dr Pepper Cherry Pm215" ✗ wrong — different PM code = different product
+
+STEP C: If no exact three-way match, try brand + variant only (drop PM requirement)
+- Only do this if the PM code genuinely does not appear in any EPOS name for that brand
+
+STEP D: If still no match, return null — do NOT pick the closest unrelated product
+
+CRITICAL RULES:
+1. VARIANT IS MANDATORY. Cherry ≠ Original ≠ Zero ≠ Diet ≠ Max ≠ Sugar Free.
+   A promo for Cherry MUST match an EPOS name containing Cherry. No exceptions.
+   If the promo says Cherry and EPOS has "Dr Pepper Zero Cherry" — that IS the match.
+   If the promo says Cherry and EPOS has NO cherry variant → return null.
+2. PM CODE IS MANDATORY where it exists in EPOS. Pm140 ≠ Pm215. Different PM = different product.
+3. BRAND MUST MATCH exactly. "I Heart Prosecco" cannot match "Hardys". "Heineken" cannot match "Fosters".
+4. 6x4 PACK FORMAT: "Heineken 6x4x440ml PM£6.59" → EPOS match is "Heineken Pm659" (4-pack sells at £6.59).
+5. MIXED CASES with "/": "Chardonnay/Merlot" → match to the FIRST named variant in EPOS (Chardonnay).
+6. SPIRITS single bottles: "Smirnoff 70cl PM£17.59" → match "Smirnoff" + "Pm1759". Pm1759 ≠ Pm2359.
+7. PM MATCHING: PM£6.59 converts to Pm659. If "Heineken Pm659" exists in EPOS → that IS the match.
+8. NEVER sum multiple EPOS variants. "Pepsi Max Pm139" and "Pepsi Max Pm219" are DIFFERENT products.
+9. If you are not confident, return null. A wrong match causes the store to order products they don't sell.
+
+RESPOND with ONLY a JSON array in the same order as the promotion products above:
+[{"promo_index":0,"epos_match":"exact EPOS name from the list above, or null","match_notes":"brief reason"}]`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // UI COMPONENTS
 // ═══════════════════════════════════════════════════════════════════
 function PromoRow({ item, onEdit, priceHistory }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen]       = useState(false);
   const [editing, setEditing] = useState(false);
-  const [newDec, setNewDec] = useState(item.user_override || item.decision);
-  const [notes, setNotes] = useState(item.user_notes || "");
-  const dec = item.user_override || item.decision;
+  const [newDec, setNewDec]   = useState(item.user_override || item.decision);
+  const [notes, setNotes]     = useState(item.user_notes || "");
+  const dec   = item.user_override || item.decision;
   const decBg = dec === "BUY" ? C.greenDim : dec === "TEST" ? C.orangeDim : C.redDim;
   const decBd = dec === "BUY" ? "rgba(34,197,94,0.2)" : dec === "TEST" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)";
-  const cp = item.casePrice || item.case_price;
-  const prev = priceHistory?.find(h => h.product?.toLowerCase() === item.product?.toLowerCase() && h.scan_id !== item.scan_id);
-  const chg = prev && cp ? Math.round((Number(cp) - Number(prev.case_price)) * 100) / 100 : null;
+  const cp    = item.casePrice || item.case_price;
+  const prev  = priceHistory?.find(h => h.product?.toLowerCase() === item.product?.toLowerCase() && h.scan_id !== item.scan_id);
+  const chg   = prev && cp ? Math.round((Number(cp) - Number(prev.case_price)) * 100) / 100 : null;
+
   return (
     <div style={{ marginBottom: 6 }}>
       <div onClick={() => setOpen(o => !o)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: open ? "10px 10px 0 0" : 10, background: open ? decBg : C.surface, border: `1px solid ${open ? decBd : C.border}`, cursor: "pointer" }}>
@@ -383,36 +436,59 @@ function PromoRow({ item, onEdit, priceHistory }) {
   );
 }
 
-const Mini = ({ label, value, color }) => (<div style={{ flex: "1 1 45%", background: C.surface, borderRadius: 8, padding: "8px 10px", border: `1px solid ${C.border}` }}><div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div><div style={{ fontSize: 14, fontWeight: 800, color: color || C.white }}>{value}</div></div>);
+const Mini = ({ label, value, color }) => (
+  <div style={{ flex: "1 1 45%", background: C.surface, borderRadius: 8, padding: "8px 10px", border: `1px solid ${C.border}` }}>
+    <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 2 }}>{label}</div>
+    <div style={{ fontSize: 14, fontWeight: 800, color: color || C.white }}>{value}</div>
+  </div>
+);
 
 // ═══════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 export default function LeafletScanner({ analysis, clientId, allDays }) {
-  const [view, setView] = useState("menu");
-  const [photos, setPhotos] = useState([]); const [previews, setPreviews] = useState([]);
-  const [budget, setBudget] = useState("750"); const [supplier, setSupplier] = useState("");
-  const [scanning, setScanning] = useState(false); const [scanStep, setScanStep] = useState("");
-  const [result, setResult] = useState(null); const [error, setError] = useState(null);
-  const [history, setHistory] = useState([]); const [priceHist, setPriceHist] = useState([]);
-  const [corrections, setCorrections] = useState([]);
-  const [selScan, setSelScan] = useState(null); const [selDecs, setSelDecs] = useState([]); const [selSkips, setSelSkips] = useState([]);
-  const [saving, setSaving] = useState(false);
+  const [view, setView]         = useState("menu");
+  const [photos, setPhotos]     = useState([]);
+  const [previews, setPreviews] = useState([]);
+  const [budget, setBudget]     = useState("750");
+  const [supplier, setSupplier] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [scanStep, setScanStep] = useState("");
+  const [result, setResult]     = useState(null);
+  const [error, setError]       = useState(null);
+  const [history, setHistory]   = useState([]);
+  const [priceHist, setPriceHist] = useState([]);
+  const [selScan, setSelScan]   = useState(null);
+  const [selDecs, setSelDecs]   = useState([]);
+  const [selSkips, setSelSkips] = useState([]);
+  const [saving, setSaving]     = useState(false);
 
-  // Pre-calculate velocity map from all uploaded data
-  const velMap = useMemo(() => buildVelocityMap(allDays), [allDays]);
+  const velMap    = useMemo(() => buildVelocityMap(allDays), [allDays]);
   const eposNames = useMemo(() => Object.values(velMap).map(v => v.product).sort(), [velMap]);
 
-  useEffect(() => { if (!clientId) return; (async () => { try { const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]); setHistory(s || []); setPriceHist(p || []); } catch (e) { console.error(e); } })(); }, [clientId]);
+  useEffect(() => {
+    if (!clientId) return;
+    (async () => {
+      try {
+        const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]);
+        setHistory(s || []);
+        setPriceHist(p || []);
+      } catch (e) { console.error(e); }
+    })();
+  }, [clientId]);
 
-  const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-  const scansThisWeek = history.filter(s => new Date(s.created_at) >= weekStart).length;
-  const canScan = scansThisWeek < MAX_SCANS_PER_WEEK;
+  const weekStart      = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  const scansThisWeek  = history.filter(s => new Date(s.created_at) >= weekStart).length;
+  const canScan        = scansThisWeek < MAX_SCANS_PER_WEEK;
 
-  const addPhotos = (e) => { const files = Array.from(e.target.files || []); setPhotos(p => [...p, ...files]); files.forEach(f => { const r = new FileReader(); r.onload = ev => setPreviews(p => [...p, ev.target.result]); r.readAsDataURL(f); }); };
+  const addPhotos = (e) => {
+    const files = Array.from(e.target.files || []);
+    setPhotos(p => [...p, ...files]);
+    files.forEach(f => { const r = new FileReader(); r.onload = ev => setPreviews(p => [...p, ev.target.result]); r.readAsDataURL(f); });
+  };
   const rmPhoto = i => { setPhotos(p => p.filter((_, j) => j !== i)); setPreviews(p => p.filter((_, j) => j !== i)); };
 
-  // ─── THREE-STEP SCAN ──────────────────────────────────────────
+  // ─── THREE-STEP SCAN ────────────────────────────────────────────
   const scan = async () => {
     if (!photos.length || !ANTHROPIC_KEY || !supplier.trim()) return;
     if (!canScan) { setError(`Weekly limit (${MAX_SCANS_PER_WEEK}) reached.`); return; }
@@ -453,28 +529,29 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
       // ── STEP 3: JavaScript calculates everything ──
       setScanStep("Step 3/3: Calculating decisions...");
       const matchedProducts = extracted.map((prod, i) => {
-        const match = matches.find(m => m.promo_index === i) || matches[i] || {};
+        const match    = matches.find(m => m.promo_index === i) || matches[i] || {};
         const eposName = match.epos_match;
-        let epos = null;
-        
+        let epos       = null;
+
+        // Primary: use AI match with brand validation
         if (eposName && eposName !== "null" && eposName !== "No match") {
-          // BRAND VALIDATION
-          const promoBrand = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
-          const matchBrand = (eposName || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
-          const brandsRelated = promoBrand === matchBrand || 
-            eposName.toLowerCase().includes(promoBrand) || 
+          const promoBrand   = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          const matchBrand   = (eposName || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          const brandsRelated = promoBrand === matchBrand ||
+            eposName.toLowerCase().includes(promoBrand) ||
             (prod.product_name || "").toLowerCase().includes(matchBrand);
-          
+
           if (brandsRelated) {
             epos = findEposMatch(prod.product_name, eposName, velMap);
           }
         }
-        
-        // JS FALLBACK: ONLY Strategy A (brand + PM code) — strict, no fuzzy matching
+
+        // JS Fallback: Strategy A only — brand + PM code with startsWith (strict, no fuzzy)
+        // Strategies B (sell price) and C (keyword) removed — they cause false matches
         if (!epos) {
           const promoRrp = (prod.rrp || "").replace(/[^0-9.]/g, "");
-          const pmCode = promoRrp.replace(".", "");
-          const brand = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          const pmCode   = promoRrp.replace(".", ""); // "6.59" → "659"
+          const brand    = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
 
           if (brand && pmCode && pmCode.length >= 2) {
             for (const v of Object.values(velMap)) {
@@ -486,7 +563,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
             }
           }
         }
-        
+
         const rrpNum = parseFloat((prod.rrp || "").replace(/[^0-9.]/g, "")) || 0;
         return {
           ...prod, rrp_num: rrpNum,
@@ -495,13 +572,13 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         };
       });
 
-      const result = calculateDecisions(matchedProducts, budget);
-      result.source = supplier;
-      result.promoDates = extracted[0]?.deal_notes || "";
-      result.budget = parseInt(budget) || 750;
-      result.keyInsight = `${result.lines.buy} products to buy, ${result.lines.test} to test from ${supplier}. ${result.totalSpend > 0 ? `Total spend £${result.totalSpend} (${result.budgetPct}% of budget).` : ""}`;
+      const res       = calculateDecisions(matchedProducts, budget);
+      res.source      = supplier;
+      res.promoDates  = extracted[0]?.deal_notes || "";
+      res.budget      = parseInt(budget) || 750;
+      res.keyInsight  = `${res.lines.buy} products to buy, ${res.lines.test} to test from ${supplier}. ${res.totalSpend > 0 ? `Total spend £${res.totalSpend} (${res.budgetPct}% of budget).` : ""}`;
 
-      setResult(result);
+      setResult(res);
       setView("results");
     } catch (e) {
       console.error("Scan:", e);
@@ -515,7 +592,8 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
     try {
       await savePromoScan(clientId, result, result.decisions || [], result.skips || []);
       const [s, p] = await Promise.all([loadPromoScans(clientId), loadAllPriceHistory(clientId)]);
-      setHistory(s || []); setPriceHist(p || []); setView("menu"); setResult(null); setPhotos([]); setPreviews([]);
+      setHistory(s || []); setPriceHist(p || []);
+      setView("menu"); setResult(null); setPhotos([]); setPreviews([]);
     } catch (e) { setError("Save failed: " + e.message); }
     setSaving(false);
   };
@@ -526,33 +604,50 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
       if (notes) await saveCorrection(clientId, item.product, "override", `${dec}: ${notes}`);
       setSelDecs(p => p.map(d => d.id === item.id ? { ...d, user_override: dec, user_notes: notes } : d));
     } else {
-      const i = result.decisions.findIndex(d => d.product === item.product);
-      if (i >= 0) { result.decisions[i].user_override = dec; result.decisions[i].user_notes = notes; setResult({ ...result }); }
+      const idx = result.decisions.findIndex(d => d.product === item.product);
+      if (idx >= 0) { result.decisions[idx].user_override = dec; result.decisions[idx].user_notes = notes; setResult({ ...result }); }
     }
   };
 
-  const viewHist = async (s) => { setSelScan(s); const [d, k] = await Promise.all([loadPromoDecisions(s.id), loadPromoSkips(s.id)]); setSelDecs(d || []); setSelSkips(k || []); setView("detail"); };
-  const delScan = async (id) => { if (!confirm("Are you sure you want to delete this scan?")) return; await deletePromoScan(id); setHistory(p => p.filter(s => s.id !== id)); setView("menu"); };
+  const viewHist = async (s) => {
+    setSelScan(s);
+    const [d, k] = await Promise.all([loadPromoDecisions(s.id), loadPromoSkips(s.id)]);
+    setSelDecs(d || []); setSelSkips(k || []);
+    setView("detail");
+  };
+  const delScan = async (id) => {
+    if (!confirm("Are you sure you want to delete this scan?")) return;
+    await deletePromoScan(id);
+    setHistory(p => p.filter(s => s.id !== id));
+    setView("menu");
+  };
 
-  // ── MENU ──
+  // ── MENU ────────────────────────────────────────────────────────
   if (view === "menu") return (
     <SectionCard title="Promotions" icon="🎯" accent="rgba(34,197,94,0.06)">
       {!ANTHROPIC_KEY ? <EmptyState msg="API key required in Vercel settings" /> : <>
         <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>Upload supplier leaflet photos. AI reads every product and matches to your EPOS. All calculations done locally — velocity, cover, POR, budget are always accurate.</div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <span style={{ fontSize: 11, color: C.textMuted }}>Scans this week: {scansThisWeek}/{MAX_SCANS_PER_WEEK}</span>
-          {!canScan && <Badge type="LOW">LIMIT REACHED</Badge>}
+          <span style={{ fontSize: 11, color: C.textMuted }}>Scans this week: {scansThisWeek}</span>
         </div>
-        <button onClick={() => canScan ? setView("scan") : null} disabled={!canScan} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: canScan ? C.green : C.surface, color: canScan ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16, opacity: canScan ? 1 : 0.5 }}>📷 Scan New Leaflet</button>
+        <button onClick={() => setView("scan")} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: C.green, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 16 }}>📷 Scan New Leaflet</button>
         {history.length > 0 && <>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Previous Scans</div>
-          {history.map((s, i) => <div key={i} onClick={() => viewHist(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}><div><div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{s.supplier}</div><div style={{ fontSize: 10, color: C.textMuted }}>{new Date(s.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {s.buy_count}B/{s.test_count}T · {fi(s.total_spend)}</div></div><span style={{ color: C.textMuted }}>›</span></div>)}
+          {history.map((s, i) => (
+            <div key={i} onClick={() => viewHist(s)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{s.supplier}</div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>{new Date(s.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {s.buy_count}B/{s.test_count}T · {fi(s.total_spend)}</div>
+              </div>
+              <span style={{ color: C.textMuted }}>›</span>
+            </div>
+          ))}
         </>}
       </>}
     </SectionCard>
   );
 
-  // ── SCAN ──
+  // ── SCAN ────────────────────────────────────────────────────────
   if (view === "scan") return (
     <SectionCard title="Scan Leaflet" icon="📷">
       <button onClick={() => { setView("menu"); setPhotos([]); setPreviews([]); setError(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
@@ -566,10 +661,22 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Take photo or choose from library</div>
       </label>
-      {previews.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>{previews.map((p, i) => <div key={i} style={{ position: "relative", width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}><img src={p} style={{ width: "100%", height: "100%", objectFit: "cover" }} /><button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>)}</div>}
+      {previews.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {previews.map((p, i) => (
+            <div key={i} style={{ position: "relative", width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+              <img src={p} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Budget:</span>
-        <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}><span style={{ color: C.textMuted }}>£</span><input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} /></div>
+        <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}>
+          <span style={{ color: C.textMuted }}>£</span>
+          <input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} />
+        </div>
       </div>
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>📊 {Object.keys(velMap).length} products in EPOS · {(allDays || []).length} days of data</div>
       {error && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.redDim, marginBottom: 12, fontSize: 12, color: C.redText }}>{error}</div>}
@@ -579,21 +686,46 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
     </SectionCard>
   );
 
-  // ── RESULTS ──
+  // ── RESULTS ─────────────────────────────────────────────────────
   if (view === "results" && result) {
-    const b = (result.decisions || []).filter(d => (d.user_override || d.decision) === "BUY");
-    const t = (result.decisions || []).filter(d => (d.user_override || d.decision) === "TEST");
+    const b  = (result.decisions || []).filter(d => (d.user_override || d.decision) === "BUY");
+    const t  = (result.decisions || []).filter(d => (d.user_override || d.decision) === "TEST");
     const sk = result.skips || [];
     return (<>
       <SectionCard title="Promotion Forensic" icon="🎯" accent="rgba(34,197,94,0.06)">
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><Mini label="Budget" value={fi(result.budget || budget)} /><Mini label="Spent" value={fi(result.totalSpend || 0)} color={C.white} /><Mini label="ROI" value={`${result.roi || 0}%`} color={C.greenText} /><Mini label="Lines" value={`${b.length}B / ${t.length}T`} /></div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <Mini label="Budget" value={fi(result.budget || budget)} />
+          <Mini label="Spent"  value={fi(result.totalSpend || 0)} />
+          <Mini label="ROI"    value={`${result.roi || 0}%`} color={C.greenText} />
+          <Mini label="Lines"  value={`${b.length}B / ${t.length}T`} />
+        </div>
         {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
-        {result.keyInsight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14 }}><div style={{ fontSize: 10, color: C.accentLight, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Summary</div><div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{result.keyInsight}</div></div>}
+        {result.keyInsight && (
+          <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14 }}>
+            <div style={{ fontSize: 10, color: C.accentLight, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Summary</div>
+            <div style={{ fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{result.keyInsight}</div>
+          </div>
+        )}
         {b.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, textTransform: "uppercase", marginBottom: 8 }}>✅ Buy ({b.length})</div>{b.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
         {t.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🔶 Test ({t.length})</div>{t.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
-        {result.totalSpend > 0 && <div style={{ marginTop: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 4 }}><span>Budget</span><span>{result.budgetPct}%</span></div><div style={{ height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, result.budgetPct)}%`, background: C.green, borderRadius: 3 }} /></div><div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>{f(result.remaining)} remaining</div></div>}
+        {result.totalSpend > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textMuted, marginBottom: 4 }}><span>Budget</span><span>{result.budgetPct}%</span></div>
+            <div style={{ height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, result.budgetPct)}%`, background: C.green, borderRadius: 3 }} /></div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>{f(result.remaining)} remaining</div>
+          </div>
+        )}
       </SectionCard>
-      {sk.length > 0 && <SectionCard title="Skipped" icon="🚫">{sk.map((s, i) => <div key={i} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim }}><div style={{ fontSize: 11, color: C.white }}>{s.product}</div><div style={{ fontSize: 10, color: C.textMuted }}>{s.reason}</div></div>)}</SectionCard>}
+      {sk.length > 0 && (
+        <SectionCard title="Skipped" icon="🚫">
+          {sk.map((s, i) => (
+            <div key={i} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim }}>
+              <div style={{ fontSize: 11, color: C.white }}>{s.product}</div>
+              <div style={{ fontSize: 10, color: C.textMuted }}>{s.reason}</div>
+            </div>
+          ))}
+        </SectionCard>
+      )}
       <div style={{ padding: "0 16px 20px", display: "flex", gap: 8 }}>
         <button onClick={save} disabled={saving} style={{ flex: 1, padding: 14, borderRadius: 12, border: "none", background: C.green, color: C.white, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{saving ? "Saving..." : "💾 Save"}</button>
         <button onClick={() => { setView("scan"); setResult(null); }} style={{ padding: "14px 20px", borderRadius: 12, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Rescan</button>
@@ -601,7 +733,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
     </>);
   }
 
-  // ── HISTORY DETAIL ──
+  // ── HISTORY DETAIL ───────────────────────────────────────────────
   if (view === "detail" && selScan) {
     const b = selDecs.filter(d => (d.user_override || d.decision) === "BUY");
     const t = selDecs.filter(d => (d.user_override || d.decision) === "TEST");
@@ -609,13 +741,28 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
       <SectionCard title={selScan.supplier} icon="🎯">
         <button onClick={() => setView("menu")} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: "0 0 12px", fontWeight: 600 }}>← Back</button>
         <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>{new Date(selScan.created_at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long" })}</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}><Mini label="Spent" value={fi(selScan.total_spend)} /><Mini label="ROI" value={`${selScan.roi}%`} color={C.greenText} /><Mini label="Lines" value={`${selScan.buy_count}B/${selScan.test_count}T`} /></div>
-        {selScan.key_insight && <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14, fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{selScan.key_insight}</div>}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <Mini label="Spent" value={fi(selScan.total_spend)} />
+          <Mini label="ROI"   value={`${selScan.roi}%`} color={C.greenText} />
+          <Mini label="Lines" value={`${selScan.buy_count}B/${selScan.test_count}T`} />
+        </div>
+        {selScan.key_insight && (
+          <div style={{ background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", borderRadius: 10, padding: 10, border: "1px solid rgba(46,80,144,0.2)", marginBottom: 14, fontSize: 11, color: C.textPrimary, lineHeight: 1.5 }}>{selScan.key_insight}</div>
+        )}
         {b.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, textTransform: "uppercase", marginBottom: 8 }}>✅ Buy ({b.length})</div>{b.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
         {t.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.orangeText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🔶 Test ({t.length})</div>{t.map((p, i) => <PromoRow key={i} item={p} onEdit={editDec} priceHistory={priceHist} />)}</>}
-        {selSkips.length > 0 && <><div style={{ fontSize: 11, fontWeight: 700, color: C.redText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🚫 Skipped ({selSkips.length})</div>{selSkips.map((s, i) => <div key={i} style={{ padding: "6px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim, fontSize: 11 }}><span style={{ color: C.white }}>{s.product}</span> — <span style={{ color: C.textMuted }}>{s.reason}</span></div>)}</>}
+        {selSkips.length > 0 && (
+          <><div style={{ fontSize: 11, fontWeight: 700, color: C.redText, textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>🚫 Skipped ({selSkips.length})</div>
+          {selSkips.map((s, i) => (
+            <div key={i} style={{ padding: "6px 10px", marginBottom: 4, borderRadius: 8, background: C.redDim, fontSize: 11 }}>
+              <span style={{ color: C.white }}>{s.product}</span> — <span style={{ color: C.textMuted }}>{s.reason}</span>
+            </div>
+          ))}</>
+        )}
       </SectionCard>
-      <div style={{ padding: "0 16px 20px" }}><button onClick={() => delScan(selScan.id)} style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑️ Delete Scan</button></div>
+      <div style={{ padding: "0 16px 20px" }}>
+        <button onClick={() => delScan(selScan.id)} style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑️ Delete Scan</button>
+      </div>
     </>);
   }
 
