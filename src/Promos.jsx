@@ -457,20 +457,68 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         const eposName = match.epos_match;
         let epos = null;
         
-        if (eposName && eposName !== "null") {
-          // BRAND VALIDATION: extract first significant word from both names
+        if (eposName && eposName !== "null" && eposName !== "No match") {
+          // BRAND VALIDATION
           const promoBrand = (prod.product_name || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
           const matchBrand = (eposName || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
-          
-          // If brands are completely different, reject the match
           const brandsRelated = promoBrand === matchBrand || 
             eposName.toLowerCase().includes(promoBrand) || 
             (prod.product_name || "").toLowerCase().includes(matchBrand);
           
           if (brandsRelated) {
             epos = findEposMatch(prod.product_name, eposName, velMap);
-          } else {
-            console.warn(`Brand mismatch rejected: "${prod.product_name}" → "${eposName}" (${promoBrand} ≠ ${matchBrand})`);
+          }
+        }
+        
+        // JS FALLBACK: if AI returned null, try matching by brand + PM code from the leaflet
+        if (!epos) {
+          const promoName = (prod.product_name || "").toLowerCase();
+          const promoRrp = (prod.rrp || "").replace(/[^0-9.]/g, "");
+          const pmCode = promoRrp ? promoRrp.replace(".", "") : "";
+          const brand = promoName.replace(/[^a-z0-9\s]/g, "").split(/\s+/)[0];
+          
+          // Strategy A: brand + PM code in EPOS name (e.g. "Heineken Pm659")
+          if (brand && pmCode) {
+            for (const v of Object.values(velMap)) {
+              const ep = v.product.toLowerCase();
+              if (ep.includes(brand) && (ep.includes(`pm${pmCode}`) || ep.includes(`pm${promoRrp}`))) {
+                epos = v;
+                break;
+              }
+            }
+          }
+          
+          // Strategy B: brand + sell price match (gross÷qty ≈ leaflet RRP)
+          if (!epos && brand && promoRrp) {
+            const leafletPrice = parseFloat(promoRrp);
+            if (leafletPrice > 0) {
+              let bestMatch = null;
+              let bestDiff = 0.10; // tolerance: within 10p
+              for (const v of Object.values(velMap)) {
+                const ep = v.product.toLowerCase();
+                if (!ep.includes(brand)) continue;
+                // Calculate implied sell price from EPOS data
+                const impliedPrice = v.sellPrice;
+                if (impliedPrice > 0) {
+                  const diff = Math.abs(impliedPrice - leafletPrice);
+                  if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestMatch = v;
+                  }
+                }
+              }
+              if (bestMatch) epos = bestMatch;
+            }
+          }
+          
+          // Strategy C: brand + keyword matching (fallback for generic names)
+          if (!epos && brand) {
+            const promoWords = promoName.split(/[\s\/]+/).filter(w => w.length > 2);
+            for (const v of Object.values(velMap)) {
+              const ep = v.product.toLowerCase();
+              const matchCount = promoWords.filter(w => ep.includes(w)).length;
+              if (matchCount >= 2) { epos = v; break; }
+            }
           }
         }
         
