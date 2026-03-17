@@ -142,52 +142,6 @@ function matchPromoToEpos(promoName, promoRrp, velMap) {
 }
 
 
-  // Build required variant list from both the promo name and the AI match string
-  const searchVariants  = VARIANT_KEYWORDS.filter(kw => search.includes(kw));
-  const leafletVariants = VARIANT_KEYWORDS.filter(kw => (leafletProduct || "").toLowerCase().includes(kw));
-  // Use whichever source is more specific
-  const requiredVariants = searchVariants.length >= leafletVariants.length ? searchVariants : leafletVariants;
-
-  const matchBrand = search.split(/[\s\/]+/)[0];
-
-  for (const v of Object.values(velMap)) {
-    const eposName  = v.product.toLowerCase();
-    const eposBrand = eposName.split(/[\s\/]+/)[0];
-
-    // Brand must match
-    if (eposBrand !== matchBrand) continue;
-
-    // ALL required variant keywords must be present in the EPOS name
-    if (requiredVariants.length > 0) {
-      if (!requiredVariants.every(kw => eposName.includes(kw))) continue;
-    }
-
-    // If promo has NO variant keywords, reject EPOS names that DO have them
-    // (prevents "Dr Pepper Original" matching "Dr Pepper Cherry")
-    if (requiredVariants.length === 0) {
-      const eposHasVariant  = VARIANT_KEYWORDS.some(kw => eposName.includes(kw));
-      const promoHasVariant = VARIANT_KEYWORDS.some(kw => (leafletProduct || "").toLowerCase().includes(kw));
-      if (eposHasVariant && !promoHasVariant) continue;
-    }
-
-    if (eposName.includes(search) || search.includes(eposName)) return v;
-  }
-
-  // Last resort: brand + all variant keywords match + at least 2 common words
-  for (const v of Object.values(velMap)) {
-    const eposName  = v.product.toLowerCase();
-    const eposWords = eposName.split(/\s+/);
-    const searchWords = search.split(/\s+/);
-    if (eposWords[0] !== matchBrand) continue;
-    if (requiredVariants.length > 0 && !requiredVariants.every(kw => eposName.includes(kw))) continue;
-    // Require words longer than 3 chars so "dr"/"pm" don't count as meaningful matches
-    const commonWords = eposWords.filter(w => w.length > 3 && searchWords.some(sw => sw.includes(w) || w.includes(sw)));
-    if (commonWords.length >= 2) return v;
-  }
-
-  return null;
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // PACK STRUCTURE VALIDATOR — overrides AI's units_per_case
 // ═══════════════════════════════════════════════════════════════════
