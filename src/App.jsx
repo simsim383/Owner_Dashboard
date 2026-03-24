@@ -10,10 +10,9 @@ import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopS
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
-import LeafletScanner from "./Promos.jsx";
 
 // ─── SETTINGS SECTION ───────────────────────────────────────────
-function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
+function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay, onViewMonth }) {
   const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [currentPin, setCurrentPin] = useState("");
@@ -40,13 +39,13 @@ function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
   if (activeSettings === "uploads") return (
     <div>
       <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
-      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} />
+      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} onViewDay={onViewDay} onViewMonth={onViewMonth} />
     </div>
   );
 
   if (activeSettings === "pin") return (
-    <SectionCard title="Change PIN" icon="🔑">
-      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
+    <SectionCard title="Change PIN" icon="🔐">
+      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 16, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
       <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CURRENT PIN</div>
       <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={currentPin} onChange={e => { setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
       <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>NEW PIN</div>
@@ -54,36 +53,32 @@ function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
       <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM NEW PIN</div>
       <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={confirmNewPin} onChange={e => { setConfirmNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
       {pinMsg && <div style={{ fontSize: 13, color: pinMsg.startsWith("✓") ? C.greenText : C.redText, marginBottom: 12 }}>{pinMsg}</div>}
-      <button onClick={handleChangePin} disabled={savingPin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>{savingPin ? "Saving..." : "Update PIN"}</button>
+      <button onClick={handleChangePin} disabled={savingPin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+        {savingPin ? "Saving..." : "Update PIN"}
+      </button>
     </SectionCard>
   );
 
   return (
     <SectionCard title="Settings" icon="⚙️">
-      <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16 }}>Logged in as <strong style={{ color: C.white }}>{clientName}</strong></div>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>Logged in as <span style={{ color: C.white, fontWeight: 700 }}>{clientName || clientId}</span></div>
       {[
-        { label: "Manage Uploads", sub: "View, delete uploaded data", icon: "📋", action: () => setActiveSettings("uploads") },
-        { label: "Change PIN", sub: "Update your 4-digit PIN", icon: "🔑", action: () => setActiveSettings("pin") },
+        { label: "📋 Manage Uploads", sub: "View, delete, browse history", action: () => setActiveSettings("uploads") },
+        { label: "🔐 Change PIN", sub: "Update your 4-digit PIN", action: () => setActiveSettings("pin") },
       ].map((item, i) => (
-        <div key={i} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginBottom: 8, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
-          <span style={{ fontSize: 22 }}>{item.icon}</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.white }}>{item.label}</div>
-            <div style={{ fontSize: 12, color: C.textMuted }}>{item.sub}</div>
+        <div key={i} onClick={item.action} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", marginBottom: 8, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>{item.label}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{item.sub}</div>
           </div>
-          <span style={{ fontSize: 14, color: C.textMuted }}>›</span>
+          <span style={{ color: C.textMuted, fontSize: 16 }}>›</span>
         </div>
       ))}
-      <div onClick={() => setConfirmLogout(true)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginTop: 16, borderRadius: 12, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", cursor: "pointer" }}>
-        <span style={{ fontSize: 22 }}>🚪</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.redText }}>Log Out</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Return to login screen</div>
-        </div>
-      </div>
-      {confirmLogout && (
-        <div style={{ marginTop: 16, padding: 16, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 12 }}>Are you sure you want to log out?</div>
+      {!confirmLogout ? (
+        <button onClick={() => setConfirmLogout(true)} style={{ width: "100%", marginTop: 8, padding: "12px", borderRadius: 10, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Log Out</button>
+      ) : (
+        <div style={{ padding: 16, borderRadius: 12, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", marginTop: 8 }}>
+          <div style={{ fontSize: 13, color: C.white, marginBottom: 12 }}>Are you sure you want to log out?</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setConfirmLogout(false)} style={{ flex: 1, padding: "12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
             <button onClick={onLogout} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: C.red, color: C.white, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Log Out</button>
@@ -111,13 +106,12 @@ const monthlySections = [
   { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
 ];
 const alwaysSections = [
-  { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "coming", label: "Coming Up", icon: "📅" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -126,7 +120,7 @@ const bottomNav = [
   { id: "news", icon: "📰", label: "News" },
 ];
 
-const timeRanges = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }, { id: "month", label: "Month" }];
+const timeRanges = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }, { id: "month", label: "Month" }, { id: "year", label: "Year" }];
 
 // ─── LANDING / LOGIN / SETUP ────────────────────────────────────
 function AuthScreen({ onAuthenticated }) {
@@ -156,126 +150,101 @@ function AuthScreen({ onAuthenticated }) {
       const result = await checkInviteCode(code);
       if (result.valid) setMode("setup-id");
       else setInviteMsg(result.error || "Invalid code");
-    } catch { setInviteMsg("Could not verify — check connection"); }
+    } catch { setInviteMsg("Could not verify code"); }
     setChecking(false);
   };
 
   const handleCreate = async () => {
-    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-    if (!id || id.length < 3) { setIdMsg("ID must be at least 3 characters"); return; }
+    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!id) { setIdMsg("Enter a business ID"); return; }
     if (pin.length !== 4) { setIdMsg("PIN must be 4 digits"); return; }
     if (pin !== pinConfirm) { setIdMsg("PINs don't match"); return; }
     setSaving(true); setIdMsg(null);
     try {
       await claimOwnerId(id, inviteCode.trim().toUpperCase());
-      const client = await getOrCreateClient(id);
-      if (client) await setPin(client.id, pin);
+      await setPin(id, pin);
       saveOwnerId(id);
-      // Load data and authenticate
-      onAuthenticated(client.id, client.name || id);
-    } catch (e) {
-      const msg = e.message || "";
-      if (msg.includes("taken") || msg.includes("duplicate")) setIdMsg("That ID is taken — try something more specific");
-      else setIdMsg("Setup failed: " + msg);
-    }
+      onAuthenticated(id, id);
+    } catch (e) { setIdMsg(e.message || "Failed to create account"); }
     setSaving(false);
   };
 
   const handleLogin = async () => {
     const id = loginId.trim().toLowerCase();
     if (!id) { setLoginMsg("Enter your business ID"); return; }
-    if (loginPin.length !== 4) { setLoginMsg("Enter your 4-digit PIN"); return; }
+    if (loginPin.length !== 4) { setLoginMsg("PIN must be 4 digits"); return; }
     setLoggingIn(true); setLoginMsg(null);
     try {
       const client = await getOrCreateClient(id);
-      if (!client) { setLoginMsg("Business not found"); setLoggingIn(false); return; }
-      const valid = await verifyPin(client.id, loginPin);
-      if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
+      if (!client) { setLoginMsg("Business ID not found"); setLoggingIn(false); return; }
+      const valid = await verifyPin(id, loginPin);
+      if (!valid) { setLoginMsg("Incorrect PIN"); setLoggingIn(false); return; }
       saveOwnerId(id);
-      onAuthenticated(client.id, client.name || id);
-    } catch (e) { setLoginMsg("Login failed: " + (e.message || "check connection")); }
+      onAuthenticated(id, client.owner_name || id);
+    } catch (e) { setLoginMsg(e.message || "Login failed"); }
     setLoggingIn(false);
   };
 
+  const btn = (onClick, label, disabled, variant = "primary") => (
+    <button onClick={onClick} disabled={disabled} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: disabled ? C.surface : variant === "secondary" ? C.surface : C.accentLight, color: disabled ? C.textMuted : C.white, fontSize: 15, fontWeight: 700, cursor: disabled ? "default" : "pointer", marginBottom: 12, border: variant === "secondary" ? `1px solid ${C.border}` : "none" }}>
+      {label}
+    </button>
+  );
+
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
-        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 4 }}>ShopMate Sales</div>
-        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>Owner Dashboard</div>
-
-        {/* ── LANDING ── */}
-        {mode === "landing" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button onClick={() => setMode("login")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: "none", background: C.accentLight, color: C.white, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-              Log In
-            </button>
-            <button onClick={() => setMode("setup-code")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, color: C.textSecondary, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
-              I have an invite code
-            </button>
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, padding: "40px 24px" }}>
+      {mode === "landing" && (
+        <div>
+          <div style={{ textAlign: "center", marginBottom: 40 }}>
+            <div style={{ width: 70, height: 70, borderRadius: 18, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 32, marginBottom: 16 }}>S</div>
+            <div style={{ fontSize: 26, fontWeight: 900, color: C.white, marginBottom: 8 }}>ShopMate Sales</div>
+            <div style={{ fontSize: 14, color: C.textMuted }}>Your store intelligence dashboard</div>
           </div>
-        )}
+          {btn(() => setMode("login"), "Log In")}
+          {btn(() => setMode("setup-code"), "Create Account", false, "secondary")}
+        </div>
+      )}
 
-        {/* ── LOGIN ── */}
-        {mode === "login" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Welcome back</div>
+      {mode === "login" && (
+        <div>
+          <button onClick={() => setMode("landing")} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 24 }}>← Back</button>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 24 }}>Log In</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
+          <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
+          <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
+          {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
+          {btn(handleLogin, loggingIn ? "Logging in..." : "Log In →", loggingIn)}
+        </div>
+      )}
 
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
-            <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+      {mode === "setup-code" && (
+        <div>
+          <button onClick={() => setMode("landing")} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 24 }}>← Back</button>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 8 }}>Enter Invite Code</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 24 }}>You need an invite code to create an account.</div>
+          <input style={inp} value={inviteCode} onChange={e => { setInviteCode(e.target.value.toUpperCase()); setInviteMsg(null); }} placeholder="e.g. SHOP-2024" autoFocus />
+          {inviteMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{inviteMsg}</div>}
+          {btn(handleInvite, checking ? "Checking..." : "Continue →", checking || !inviteCode.trim())}
+        </div>
+      )}
 
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
-
-            {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
-
-            <button onClick={handleLogin} disabled={loggingIn || !loginId.trim() || loginPin.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: loginId.trim() && loginPin.length === 4 ? C.accentLight : C.surface, color: loginId.trim() && loginPin.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {loggingIn ? "Logging in..." : "Log In"}
-            </button>
-
-            <button onClick={() => { setMode("landing"); setLoginMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
-          </div>
-        )}
-
-        {/* ── SETUP: INVITE CODE ── */}
-        {mode === "setup-code" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 6 }}>Enter your invite code</div>
-            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.5 }}>Each code can only be used once to create one account.</div>
-            <input style={{ ...inp, textTransform: "uppercase", letterSpacing: 2, fontWeight: 700 }} value={inviteCode} onChange={e => { setInviteCode(e.target.value.toUpperCase()); setInviteMsg(null); }} onKeyDown={e => { if (e.key === "Enter") handleInvite(); }} placeholder="e.g. HORDEN-2026" autoFocus />
-            {inviteMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{inviteMsg}</div>}
-            <button onClick={handleInvite} disabled={checking || !inviteCode.trim()} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: inviteCode.trim() ? C.accentLight : C.surface, color: inviteCode.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {checking ? "Checking..." : "Continue →"}
-            </button>
-            <button onClick={() => { setMode("landing"); setInviteMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
-          </div>
-        )}
-
-        {/* ── SETUP: CHOOSE ID + PIN ── */}
-        {mode === "setup-id" && (
-          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
-            <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Create your account</div>
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
-            <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
-            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
-
-            {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
-
-            <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
-              {saving ? "Creating..." : "Create Account →"}
-            </button>
-
-            <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
-          </div>
-        )}
-      </div>
+      {mode === "setup-id" && (
+        <div>
+          <button onClick={() => setMode("setup-code")} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 24 }}>← Back</button>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 8 }}>Create Account</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 24 }}>Choose a unique business ID and PIN.</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
+          <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
+          <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
+          <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
+          {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
+          {btn(handleCreate, saving ? "Creating..." : "Create Account →", saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4)}
+          <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
+        </div>
+      )}
       <style>{globalCSS}</style>
     </div>
   );
@@ -334,17 +303,34 @@ export default function App() {
   }, [clientId]);
 
   const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+  const [selectedYear, setSelectedYear] = useState(null);   // null = auto (current/most recent year)
+
+  // viewOverride: when user clicks View Day or View Month from Manage Uploads
+  // { type: "day", date: "2026-01-15" } or { type: "month", key: "2026-01" }
+  const [viewOverride, setViewOverride] = useState(null);
 
   // Available months from data
   const availableMonths = useMemo(() => {
     const months = {};
     allDays.forEach(d => {
       if (!d.dates?.start) return;
-      const m = d.dates.start.slice(0, 7); // "2026-03"
+      const m = d.dates.start.slice(0, 7);
       if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
       months[m].days.push(d);
     });
     return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
+  }, [allDays]);
+
+  // Available years from data
+  const availableYears = useMemo(() => {
+    const years = {};
+    allDays.forEach(d => {
+      if (!d.dates?.start) return;
+      const y = d.dates.start.slice(0, 4);
+      if (!years[y]) years[y] = { key: y, label: y, days: [] };
+      years[y].days.push(d);
+    });
+    return Object.values(years).sort((a, b) => b.key.localeCompare(a.key));
   }, [allDays]);
 
   // Previous complete month key
@@ -353,32 +339,62 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }, []);
 
-  // Current range data — day/week/month logic
+  // Current year key (most recent year with data, or current calendar year)
+  const currentYearKey = useMemo(() => {
+    if (availableYears.length > 0) return availableYears[0].key;
+    return String(new Date().getFullYear());
+  }, [availableYears]);
+
+  // Current range data — day/week/month/year logic (viewOverride takes priority)
   const currentDays = useMemo(() => {
     if (!allDays.length) return [];
+
+    // viewOverride from Manage Uploads
+    if (viewOverride) {
+      if (viewOverride.type === "day") {
+        const match = allDays.find(d => d.dates?.start === viewOverride.date);
+        return match ? [match] : [];
+      }
+      if (viewOverride.type === "month") {
+        return allDays.filter(d => d.dates?.start?.startsWith(viewOverride.key));
+      }
+    }
+
     if (timeRange === "day") return [allDays[allDays.length - 1]];
     if (timeRange === "week") return allDays.slice(-7);
-    // Month: use selected month or previous complete month
-    const mKey = selectedMonth || prevMonthKey;
-    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
-    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
-  }, [allDays, timeRange, selectedMonth, prevMonthKey]);
+    if (timeRange === "month") {
+      const mKey = selectedMonth || prevMonthKey;
+      const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
+      return monthDays.length > 0 ? monthDays : allDays;
+    }
+    if (timeRange === "year") {
+      const yKey = selectedYear || currentYearKey;
+      const yearDays = allDays.filter(d => d.dates?.start?.startsWith(yKey));
+      return yearDays.length > 0 ? yearDays : allDays;
+    }
+    return allDays;
+  }, [allDays, timeRange, selectedMonth, selectedYear, prevMonthKey, currentYearKey, viewOverride]);
 
   const currentData = useMemo(() => {
     if (!currentDays.length) return null;
-    if (timeRange === "day") return currentDays[0];
+    if ((timeRange === "day" && !viewOverride) || (viewOverride?.type === "day")) return currentDays[0];
     return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
-  }, [currentDays, timeRange]);
+  }, [currentDays, timeRange, viewOverride]);
+
+  // Effective time range label accounting for viewOverride
+  const effectiveTimeRange = useMemo(() => {
+    if (viewOverride?.type === "day") return "day";
+    if (viewOverride?.type === "month") return "month";
+    return timeRange;
+  }, [timeRange, viewOverride]);
 
   // Previous period for WoW comparison
   const prevWeekDays = useMemo(() => {
     if (!allDays.length) return null;
-    if (timeRange === "day") {
-      // Day mode: return previous day as a single-element array
+    if (effectiveTimeRange === "day") {
       return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
     }
-    if (timeRange === "month") {
-      // Month mode: find the PREVIOUS calendar month's data
+    if (effectiveTimeRange === "month") {
       const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
       if (!currentMonthKey) return null;
       const d = new Date(currentMonthKey + "-15");
@@ -387,19 +403,45 @@ export default function App() {
       const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
       return prevDays.length > 0 ? prevDays : null;
     }
-    // Week mode: get the same number of days before
+    if (effectiveTimeRange === "year") {
+      const currentYearStr = currentDays[0]?.dates?.start?.slice(0, 4);
+      if (!currentYearStr) return null;
+      const prevYearStr = String(parseInt(currentYearStr) - 1);
+      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevYearStr));
+      return prevDays.length > 0 ? prevDays : null;
+    }
     return getPrevWeekData(allDays, currentDays);
-  }, [allDays, currentDays, timeRange]);
+  }, [allDays, currentDays, effectiveTimeRange]);
 
-  const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
-  const isMultiDay = timeRange !== "day";
-  const isMonth = timeRange === "month";
-  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
+  const rangeLabel = effectiveTimeRange === "day" ? "Today" : effectiveTimeRange === "week" ? "This Week" : effectiveTimeRange === "year" ? "This Year" : "This Month";
+  const isMultiDay = effectiveTimeRange !== "day";
+  const isMonth = effectiveTimeRange === "month";
+  const isYear = effectiveTimeRange === "year";
+  const sectionList = [...baseSections, ...((isMonth || isYear) ? monthlySections : []), ...alwaysSections];
   const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
   const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Handle view day/month from Manage Uploads — switch to dashboard with override
+  const handleViewDay = useCallback((date) => {
+    setViewOverride({ type: "day", date });
+    setActiveSection("dashboard");
+    setActiveTab("home");
+  }, []);
+
+  const handleViewMonth = useCallback((monthKey) => {
+    setViewOverride({ type: "month", key: monthKey });
+    setActiveSection("dashboard");
+    setActiveTab("home");
+  }, []);
+
+  // Clear viewOverride when user manually changes time range
+  const handleTimeRangeChange = useCallback((tr) => {
+    setTimeRange(tr);
+    setViewOverride(null);
+  }, []);
 
   // Not authenticated — show login/setup screen
   if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
@@ -425,15 +467,23 @@ export default function App() {
   );
 
   const { summary } = analysis;
-  const dateLabel = currentData.dates ? (timeRange === "day"
+
+  // Date label in header
+  const viewOverrideLabel = viewOverride
+    ? viewOverride.type === "day"
+      ? `📌 ${new Date(viewOverride.date + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+      : `📌 ${new Date(viewOverride.key + "-15T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" })}`
+    : null;
+
+  const dateLabel = viewOverrideLabel || (currentData.dates ? (effectiveTimeRange === "day"
     ? new Date(currentData.dates.start + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })
-    : `${allDays.length} days`) : "";
+    : `${currentDays.length} days`) : "");
 
   const handleSelectProduct = (product) => setSelectedProduct(product);
 
   const renderSection = () => {
     switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
       case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
       case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
@@ -445,11 +495,10 @@ export default function App() {
       case "density": return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
-      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "coming": return <ComingUpSection />;
-      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
+      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
     }
   };
 
@@ -474,20 +523,37 @@ export default function App() {
           </div>
         </div>
 
+        {/* viewOverride banner — tap to dismiss */}
+        {viewOverride && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 8, borderRadius: 10, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)" }}>
+            <span style={{ fontSize: 12, color: C.orangeText, fontWeight: 600 }}>📌 Pinned view — {viewOverrideLabel?.replace("📌 ", "")}</span>
+            <button onClick={() => setViewOverride(null)} style={{ background: "none", border: "none", color: C.orangeText, fontSize: 13, cursor: "pointer", fontWeight: 700 }}>✕ Clear</button>
+          </div>
+        )}
+
         {/* Time toggle */}
-        <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: (isMonth || isYear) ? 8 : 12 }}>
           {timeRanges.map(tr => (
-            <button key={tr.id} onClick={() => setTimeRange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
+            <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: (timeRange === tr.id && !viewOverride) ? C.accentLight : C.surface, color: (timeRange === tr.id && !viewOverride) ? C.white : C.textMuted }}>
               {tr.label}
             </button>
           ))}
         </div>
 
         {/* Month selector — only when in month mode */}
-        {isMonth && availableMonths.length > 0 && (
+        {isMonth && !viewOverride && availableMonths.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
               {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Year selector — only when in year mode */}
+        {isYear && !viewOverride && availableYears.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <select value={selectedYear || currentYearKey} onChange={e => setSelectedYear(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
+              {availableYears.map(y => <option key={y.key} value={y.key} style={{ background: C.bg, color: C.white }}>{y.label} ({y.days.length} days of data)</option>)}
             </select>
           </div>
         )}
