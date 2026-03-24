@@ -26,7 +26,10 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
       const s = new Date(data.dates.start + "T12:00:00");
       const e = new Date(data.dates.end + "T12:00:00");
       const days = Math.round((e - s) / 86400000) + 1;
-      if (days === 1) setUploadType("day"); else if (days <= 8) setUploadType("week"); else setUploadType("month");
+      if (days === 1) setUploadType("day");
+      else if (days <= 8) setUploadType("week");
+      else if (days <= 35) setUploadType("month");
+      else setUploadType("year");
       setPendingData(data); setPendingFile(file);
     } catch (e) { setError(e.message || "Failed to read file"); }
     setLoading(false);
@@ -91,9 +94,14 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
           {/* Upload type */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>What are you uploading?</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {[{ id: "day", label: "Single Day", desc: "Exact figures" }, { id: "week", label: "Week", desc: `÷ ${dayCount} days` }, { id: "month", label: "Month", desc: `÷ ${dayCount} days` }].map(t => (
-                <button key={t.id} onClick={() => setUploadType(t.id)} style={{ flex: 1, padding: "10px 8px", borderRadius: 10, border: "none", cursor: "pointer", background: uploadType === t.id ? C.accentLight : C.surface, textAlign: "center" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[
+                { id: "day", label: "Single Day", desc: "Exact figures" },
+                { id: "week", label: "Week", desc: `÷ ${dayCount} days` },
+                { id: "month", label: "Month", desc: `÷ ${dayCount} days` },
+                { id: "year", label: "Year", desc: `÷ ${dayCount} days` },
+              ].map(t => (
+                <button key={t.id} onClick={() => setUploadType(t.id)} style={{ flex: "1 1 calc(50% - 3px)", padding: "10px 8px", borderRadius: 10, border: "none", cursor: "pointer", background: uploadType === t.id ? C.accentLight : C.surface, textAlign: "center", minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: uploadType === t.id ? C.white : C.textMuted }}>{t.label}</div>
                   <div style={{ fontSize: 10, color: uploadType === t.id ? "rgba(255,255,255,0.7)" : C.textMuted, marginTop: 2 }}>{t.desc}</div>
                 </button>
@@ -119,7 +127,7 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={cancelUpload} style={{ flex: 1, padding: "12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
             <button onClick={confirmUpload} style={{ flex: 2, padding: "12px", borderRadius: 10, border: "none", background: C.accentLight, color: C.white, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-              Upload {uploadType === "day" ? "Day" : uploadType === "week" ? "Week" : "Month"}
+              Upload {uploadType === "day" ? "Day" : uploadType === "week" ? "Week" : uploadType === "month" ? "Month" : "Year"}
             </button>
           </div>
         </>
@@ -128,10 +136,53 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
   );
 }
 
-export function ManageUploadsSection({ clientId, onRefresh }) {
+// ─── DAY POPUP ──────────────────────────────────────────────────
+function DayPopup({ upload, onClose, onOpenInDashboard }) {
+  const date = new Date(upload.report_date + "T12:00:00");
+  const dateStr = date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const gross = Number(upload.total_gross || 0);
+  const qty = Number(upload.total_qty || 0);
+  const trans = upload.transactions;
+  const avgBasket = trans && gross ? Math.round((gross / trans) * 100) / 100 : null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, border: `1px solid ${C.border}`, borderBottom: "none" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.white, marginBottom: 4 }}>{dateStr}</div>
+            {upload.is_estimated && <Badge type="ALERT">Estimated</Badge>}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+          {[
+            { label: "Revenue", value: fi(gross), color: C.white },
+            { label: "Items Sold", value: qty.toLocaleString(), color: C.white },
+            ...(trans ? [{ label: "Transactions", value: trans, color: C.white }] : []),
+            ...(avgBasket ? [{ label: "Avg Basket", value: f(avgBasket), color: C.orangeText }] : []),
+          ].map((s, i) => (
+            <div key={i} style={{ padding: "12px 14px", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={() => { onOpenInDashboard(upload.report_date); onClose(); }} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+          Open in Dashboard →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMonth }) {
   const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
+  const [dayPopup, setDayPopup] = useState(null); // upload object for popup
 
   const load = useCallback(async () => {
     if (clientId) { setLoading(true); const u = await loadUploadsMeta(clientId); setUploads(u); setLoading(false); }
@@ -153,13 +204,27 @@ export function ManageUploadsSection({ clientId, onRefresh }) {
     setUploads([]); if (onRefresh) onRefresh(); setDeleting(null);
   };
 
-  const months = {};
+  // Group by year then month
+  const years = {};
   uploads.forEach(u => {
+    const y = u.report_date.slice(0, 4);
     const m = u.report_date.slice(0, 7);
-    if (!months[m]) months[m] = { label: new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), uploads: [], totalGross: 0 };
-    months[m].uploads.push(u); months[m].totalGross += Number(u.total_gross || 0);
+    if (!years[y]) years[y] = { key: y, months: {} };
+    if (!years[y].months[m]) years[y].months[m] = {
+      key: m,
+      label: new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }),
+      uploads: [],
+      totalGross: 0,
+    };
+    years[y].months[m].uploads.push(u);
+    years[y].months[m].totalGross += Number(u.total_gross || 0);
   });
-  const monthList = Object.values(months).reverse();
+  const yearList = Object.values(years).sort((a, b) => b.key.localeCompare(a.key)).map(y => ({
+    ...y,
+    monthList: Object.values(y.months).sort((a, b) => b.key.localeCompare(a.key)),
+    totalGross: Object.values(y.months).reduce((s, m) => s + m.totalGross, 0),
+    dayCount: uploads.filter(u => u.report_date.startsWith(y.key)).length,
+  }));
 
   return (
     <SectionCard title="Manage Uploads" icon="📋">
@@ -179,42 +244,93 @@ export function ManageUploadsSection({ clientId, onRefresh }) {
         </>
       )}
 
-      {monthList.map((month, mi) => (
-        <MonthUploadGroup key={mi} month={month} deleting={deleting} onDelete={handleDelete} />
+      {yearList.map((year) => (
+        <YearUploadGroup key={year.key} year={year} deleting={deleting} onDelete={handleDelete} onViewDay={(u) => setDayPopup(u)} onViewMonth={onViewMonth} />
       ))}
+
+      {dayPopup && (
+        <DayPopup
+          upload={dayPopup}
+          onClose={() => setDayPopup(null)}
+          onOpenInDashboard={(date) => { if (onViewDay) onViewDay(date); }}
+        />
+      )}
     </SectionCard>
   );
 }
 
-// Expandable month group
-function MonthUploadGroup({ month, deleting, onDelete }) {
-  const [expanded, setExpanded] = useState(false);
+// ─── YEAR GROUP ─────────────────────────────────────────────────
+function YearUploadGroup({ year, deleting, onDelete, onViewDay, onViewMonth }) {
+  const [expanded, setExpanded] = useState(true); // years expanded by default
+
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div onClick={() => setExpanded(!expanded)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: expanded ? "10px 10px 0 0" : 10, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+    <div style={{ marginBottom: 12 }}>
+      {/* Year header */}
+      <div onClick={() => setExpanded(!expanded)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: expanded ? "10px 10px 0 0" : 10, background: "rgba(46,80,144,0.15)", border: `1px solid rgba(46,80,144,0.3)`, cursor: "pointer" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{month.label}</div>
-          <div style={{ fontSize: 11, color: C.textMuted }}>{month.uploads.length} days · {fi(month.totalGross)}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: C.white }}>📅 {year.key}</div>
+          <div style={{ fontSize: 11, color: C.textMuted }}>{year.dayCount} days · {fi(year.totalGross)}</div>
         </div>
         <span style={{ fontSize: 14, color: C.textMuted, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
       </div>
+
       {expanded && (
-        <div style={{ padding: "8px 10px 10px", background: C.surface, borderRadius: "0 0 10px 10px", border: `1px solid ${C.border}`, borderTop: "none" }}>
+        <div style={{ padding: "8px 8px 10px", background: C.surface, borderRadius: "0 0 10px 10px", border: `1px solid rgba(46,80,144,0.3)`, borderTop: "none" }}>
+          {year.monthList.map((month) => (
+            <MonthUploadGroup key={month.key} month={month} deleting={deleting} onDelete={onDelete} onViewDay={onViewDay} onViewMonth={onViewMonth} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MONTH GROUP ─────────────────────────────────────────────────
+function MonthUploadGroup({ month, deleting, onDelete, onViewDay, onViewMonth }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: expanded ? "8px 8px 0 0" : 8, background: C.card, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+        {/* Left: expand toggle */}
+        <div onClick={() => setExpanded(!expanded)} style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.textMuted, transition: "transform 0.2s", transform: expanded ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{month.label}</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>{month.uploads.length} days · {fi(month.totalGross)}</div>
+          </div>
+        </div>
+        {/* Right: View Month button */}
+        {onViewMonth && (
+          <button onClick={(e) => { e.stopPropagation(); onViewMonth(month.key); }} style={{ padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.accentGlow, color: C.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            View Month
+          </button>
+        )}
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "6px 8px 8px", background: C.surface, borderRadius: "0 0 8px 8px", border: `1px solid ${C.border}`, borderTop: "none" }}>
           {month.uploads.map((u, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", marginBottom: 2, borderRadius: 6, background: C.card, border: `1px solid ${u.is_estimated ? "rgba(245,158,11,0.15)" : C.border}` }}>
-              <div style={{ flex: 1 }}>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 8px", marginBottom: 4, borderRadius: 6, background: C.card, border: `1px solid ${u.is_estimated ? "rgba(245,158,11,0.15)" : C.border}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</span>
+                  <span style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>
+                    {new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}
+                  </span>
                   {u.is_estimated && <Badge type="ALERT">EST</Badge>}
                 </div>
                 <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
-                  {fi(Number(u.total_gross || 0))} · {u.total_qty || 0} items
-                  {u.transactions && ` · ${u.transactions} trans`}
+                  {fi(Number(u.total_gross || 0))} · {u.total_qty || 0} items{u.transactions ? ` · ${u.transactions} trans` : ""}
                 </div>
               </div>
-              <button onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) onDelete(u); }} disabled={deleting === u.id} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
-                {deleting === u.id ? "..." : "Delete"}
-              </button>
+              <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                <button onClick={() => onViewDay(u)} style={{ padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.accentGlow, color: C.accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  View
+                </button>
+                <button onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) onDelete(u); }} disabled={deleting === u.id} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
+                  {deleting === u.id ? "..." : "Del"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
