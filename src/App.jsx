@@ -252,6 +252,7 @@ function AuthScreen({ onAuthenticated }) {
         </div>
       )}
       <style>{globalCSS}</style>
+      </div>
     </div>
   );
 }
