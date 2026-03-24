@@ -70,8 +70,11 @@ export function analyzeData(allDays,currentRange,timeRange,prevWeekDays){
   }
   const prevMap={};prevItems.forEach(i=>{prevMap[i.barcode]=i;});
 
-  // Trending: includes new products (no previous sales history) that sell 3+ units
-  const trending=items.filter(i=>{const prev=prevMap[i.barcode];const isNew=!prev||prev.qty===0;if(isNew)return i.qty>=3&&i.hasCost&&(i.grossProfit||0)>0.5;return i.qty>=3&&prev.qty>0&&((i.qty-prev.qty)/prev.qty)>=0.4&&i.hasCost&&(i.grossProfit||0)>0.5;}).map(i=>{const prev=prevMap[i.barcode];const isNew=!prev||prev.qty===0;return{...i,prevQty:isNew?0:prev.qty,trendPct:isNew?999:Math.round(((i.qty-prev.qty)/prev.qty)*100)};}).sort((a,b)=>b.trendPct-a.trendPct).slice(0,15);
+  // Barcodes seen in ANY historical day OUTSIDE the current period — used to identify truly new products
+  const currentDates=new Set((currentRange.items||[]).map(()=>null)); // placeholder — use dates approach
+  const historicBarcodes=new Set(allDays.filter(d=>!currentRange.dates||d.dates?.start<currentRange.dates.start||d.dates?.start>currentRange.dates.end).flatMap(d=>d.items.map(i=>i.barcode)));
+  // Trending: original 40%+ logic PLUS brand-new products (never seen in any prior upload)
+  const trending=items.filter(i=>{const prev=prevMap[i.barcode];const brandNew=!historicBarcodes.has(i.barcode);if(brandNew)return i.qty>=3&&i.hasCost&&(i.grossProfit||0)>0.5;return i.qty>=3&&prev&&prev.qty>0&&((i.qty-prev.qty)/prev.qty)>=0.4&&i.hasCost&&(i.grossProfit||0)>0.5;}).map(i=>{const prev=prevMap[i.barcode];const brandNew=!historicBarcodes.has(i.barcode);return{...i,prevQty:brandNew?0:(prev?.qty||0),trendPct:brandNew?999:Math.round(((i.qty-prev.qty)/prev.qty)*100)};}).sort((a,b)=>b.trendPct-a.trendPct).slice(0,15);
 
   // Review: below REVIEW_THRESHOLD%, EXCLUDES tobacco
   const review=tracked.filter(i=>!EXCLUDED_REVIEW.includes(i.category)).filter(i=>i.grossMargin!=null&&i.grossMargin<REVIEW_THRESHOLD&&i.grossMargin>=0&&i.qty>=1).sort((a,b)=>(a.grossMargin||0)-(b.grossMargin||0)).slice(0,20);
