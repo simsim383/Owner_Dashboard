@@ -151,30 +151,40 @@ export async function loadUploadsMeta(clientId) {
   catch (e) { console.error("Load meta:", e); return []; }
 }
 
+// ─── FAST LOAD — single bulk query instead of N sequential loops ─
 export async function loadFromSupabase(clientId) {
   if (!clientId) return [];
   try {
+    // 1. Fetch upload metadata (lightweight)
     const uploads = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.asc&limit=365`);
-    const allDays = [];
-    for (const u of uploads) {
-      const sales = await sbGet("daily_sales", `upload_id=eq.${u.id}&order=gross.desc`);
-      allDays.push({
-        uploadId: u.id,
-        items: sales.map(s => ({
-          barcode: s.barcode, product: s.product, category: s.category,
-          qty: s.qty, gross: Number(s.gross), net: Number(s.net),
-          grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
-          grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
-          hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
-        })),
-        dates: { start: u.report_date, end: u.report_date },
-        isEstimated: u.is_estimated || false,
-        uploadType: u.upload_type || "day",
-        transactions: u.transactions,
-        avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
-      });
-    }
-    return allDays;
+    if (!uploads.length) return [];
+
+    // 2. Fetch ALL daily_sales for this client in ONE request — no more per-upload loop
+    const sales = await sbGet("daily_sales", `client_id=eq.${encodeURIComponent(clientId)}&order=upload_id.asc,gross.desc&limit=50000`);
+
+    // 3. Group sales by upload_id client-side (fast, in-memory)
+    const salesByUpload = {};
+    sales.forEach(s => {
+      if (!salesByUpload[s.upload_id]) salesByUpload[s.upload_id] = [];
+      salesByUpload[s.upload_id].push(s);
+    });
+
+    // 4. Assemble the allDays structure
+    return uploads.map(u => ({
+      uploadId: u.id,
+      items: (salesByUpload[u.id] || []).map(s => ({
+        barcode: s.barcode, product: s.product, category: s.category,
+        qty: s.qty, gross: Number(s.gross), net: Number(s.net),
+        grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
+        grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
+        hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
+      })),
+      dates: { start: u.report_date, end: u.report_date },
+      isEstimated: u.is_estimated || false,
+      uploadType: u.upload_type || "day",
+      transactions: u.transactions,
+      avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
+    }));
   } catch (e) { console.error("Load from Supabase:", e); return []; }
 }
 
@@ -206,79 +216,4 @@ export async function claimOwnerId(id, inviteCode) {
   // Create client record with PIN placeholder
   await sbPost("clients", [{ name: id, owner_name: id }]);
   return { ok: true };
-}
-
-// ─── PROMO STORAGE ──────────────────────────────────────────────
-export async function savePromoScan(clientId, scan, decisions, skips) {
-  const [scanRow] = await sbPost("promo_scans", [{
-    client_id: clientId, supplier: scan.source || "Unknown", promo_dates: scan.promoDates || "",
-    budget: scan.budget || 2500, total_spend: scan.totalSpend || 0, remaining: scan.remaining || 0,
-    est_revenue: scan.estRevenue || 0, est_profit: scan.estProfit || 0, roi: scan.roi || 0,
-    key_insight: scan.keyInsight || "", status: "active",
-    buy_count: decisions.filter(d => d.decision === "BUY").length,
-    test_count: decisions.filter(d => d.decision === "TEST").length,
-    skip_count: (skips || []).length,
-  }]);
-  // Save decisions
-  if (decisions.length > 0) {
-    await sbPost("promo_decisions", decisions.map(d => ({
-      scan_id: scanRow.id, client_id: clientId, product: d.product, source: d.source,
-      case_price: d.casePrice, por: d.por, rrp: d.rrp, vel: d.vel, qty: d.qty,
-      cover: d.cover, units: d.units, total_inc: d.totalInc, decision: d.decision, notes: d.notes,
-    })));
-  }
-  // Save price history for WoW comparison
-  if (decisions.length > 0) {
-    await sbPost("promo_price_history", decisions.filter(d => d.casePrice).map(d => ({
-      client_id: clientId, product: d.product, supplier: d.source, case_price: d.casePrice,
-      rrp: d.rrp, scan_id: scanRow.id,
-    })));
-  }
-  // Save skips
-  if (skips && skips.length > 0) {
-    await sbPost("promo_skips", skips.map(s => ({ scan_id: scanRow.id, product: s.product, reason: s.reason })));
-  }
-  return scanRow;
-}
-
-export async function loadPromoScans(clientId) {
-  return await sbGet("promo_scans", `client_id=eq.${clientId}&order=created_at.desc&limit=20`);
-}
-
-export async function loadPromoDecisions(scanId) {
-  return await sbGet("promo_decisions", `scan_id=eq.${scanId}&order=decision.asc`);
-}
-
-export async function loadPromoSkips(scanId) {
-  return await sbGet("promo_skips", `scan_id=eq.${scanId}`);
-}
-
-export async function loadPriceHistory(clientId, productName) {
-  return await sbGet("promo_price_history", `client_id=eq.${clientId}&product=eq.${encodeURIComponent(productName)}&order=scan_date.desc&limit=10`);
-}
-
-export async function loadAllPriceHistory(clientId) {
-  return await sbGet("promo_price_history", `client_id=eq.${clientId}&order=scan_date.desc&limit=500`);
-}
-
-export async function updatePromoDecision(decisionId, updates) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_decisions?id=eq.${decisionId}`, {
-    method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-    body: JSON.stringify(updates),
-  });
-  if (!r.ok) throw new Error("Failed to update decision");
-  return r.json();
-}
-
-export async function deletePromoScan(scanId) {
-  await sbDelete("promo_scans", `id=eq.${scanId}`);
-  return { ok: true };
-}
-
-export async function saveCorrection(clientId, productPattern, correctionType, correctionValue) {
-  await sbPost("promo_corrections", [{ client_id: clientId, product_pattern: productPattern, correction_type: correctionType, correction_value: correctionValue }]);
-}
-
-export async function loadCorrections(clientId) {
-  return await sbGet("promo_corrections", `client_id=eq.${clientId}&order=created_at.desc&limit=100`);
 }
