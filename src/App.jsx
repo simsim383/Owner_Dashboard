@@ -155,17 +155,22 @@ function AuthScreen({ onAuthenticated }) {
   };
 
   const handleCreate = async () => {
-    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-");
-    if (!id) { setIdMsg("Enter a business ID"); return; }
+    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!id || id.length < 3) { setIdMsg("ID must be at least 3 characters"); return; }
     if (pin.length !== 4) { setIdMsg("PIN must be 4 digits"); return; }
     if (pin !== pinConfirm) { setIdMsg("PINs don't match"); return; }
     setSaving(true); setIdMsg(null);
     try {
       await claimOwnerId(id, inviteCode.trim().toUpperCase());
-      await setPin(id, pin);
+      const client = await getOrCreateClient(id);
+      if (client) await setPin(client.id, pin);
       saveOwnerId(id);
-      onAuthenticated(id, id);
-    } catch (e) { setIdMsg(e.message || "Failed to create account"); }
+      onAuthenticated(client.id, client.name || id);
+    } catch (e) {
+      const msg = e.message || "";
+      if (msg.includes("taken") || msg.includes("duplicate")) setIdMsg("That ID is taken — try something more specific");
+      else setIdMsg("Setup failed: " + msg);
+    }
     setSaving(false);
   };
 
@@ -177,10 +182,10 @@ function AuthScreen({ onAuthenticated }) {
     try {
       const client = await getOrCreateClient(id);
       if (!client) { setLoginMsg("Business ID not found"); setLoggingIn(false); return; }
-      const valid = await verifyPin(id, loginPin);
-      if (!valid) { setLoginMsg("Incorrect PIN"); setLoggingIn(false); return; }
+      const valid = await verifyPin(client.id, loginPin);
+      if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
       saveOwnerId(id);
-      onAuthenticated(id, client.owner_name || id);
+      onAuthenticated(client.id, client.name || id);
     } catch (e) { setLoginMsg(e.message || "Login failed"); }
     setLoggingIn(false);
   };
@@ -192,7 +197,8 @@ function AuthScreen({ onAuthenticated }) {
   );
 
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, padding: "40px 24px" }}>
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
       {mode === "landing" && (
         <div>
           <div style={{ textAlign: "center", marginBottom: 40 }}>
