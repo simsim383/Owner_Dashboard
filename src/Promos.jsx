@@ -221,7 +221,7 @@ function calculateDecisions(matchedProducts, budget) {
 
     const costPerUnitIncVat = (upc > 0 ? cp / upc : cp) * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
-    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || "", upc };
+    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || "", rrpNum: rrp, upc };
 
     const isOneOff  = epos?.isOneOff || false;
     const yearlyAvg = epos?.yearlyAvg || 0;
@@ -275,34 +275,64 @@ function calculateDecisions(matchedProducts, budget) {
   });
 
   const budgetNum = Number(budget) || 750;
-  const buyItems  = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
-  while (totalSpend > budgetNum * 1.05 && buyItems.length > 0) {
-    const slowest = buyItems[0];
-    if (slowest.qty > 1) {
-      slowest.qty--; slowest.units = slowest.qty * slowest.upc;
-      slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
-      slowest.cover = `~${Math.round(slowest.units / slowest.vel)}wk`;
-      slowest.notes += " [Reduced for budget]";
-      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
-    } else { buyItems.shift(); }
+
+  // ── REBALANCE DOWN: over budget → reduce slowest movers ──
+  // Cap iterations to prevent infinite loops and note spam
+  if (totalSpend > budgetNum * 1.05) {
+    const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
+    let iterations = 0;
+    const MAX_ITER = 200;
+    while (totalSpend > budgetNum * 1.05 && buyItems.length > 0 && iterations < MAX_ITER) {
+      iterations++;
+      const slowest = buyItems[0];
+      if (slowest.qty > 1) {
+        slowest.qty--;
+        slowest.units    = slowest.qty * slowest.upc;
+        slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
+        slowest.cover    = `~${Math.round(slowest.units / slowest.vel)}wk`;
+        totalSpend       = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      } else {
+        buyItems.shift(); // Can't reduce further, move to next slowest
+      }
+    }
+    // Add a single note on any items that were reduced
+    decisions.forEach(d => {
+      if (d.decision === "BUY") {
+        const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
+        if (d.qty < originalQty) d.notes += " [Qty reduced — budget]";
+      }
+    });
   }
 
-  const fastItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => b.vel - a.vel);
-  for (const fast of fastItems) {
-    if (totalSpend >= budgetNum * 0.95) break;
-    const newCover = ((fast.qty + 1) * fast.upc) / fast.vel;
-    if (newCover <= COVER_MAX) {
-      fast.qty++; fast.units = fast.qty * fast.upc;
-      fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
-      fast.cover = `~${Math.round(newCover)}wk`;
-      fast.notes += " [Increased — budget available]";
-      totalSpend = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+  // ── REBALANCE UP: under budget → increase fastest movers ──
+  if (totalSpend < budgetNum * 0.95) {
+    const fastItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => b.vel - a.vel);
+    let iterations = 0;
+    const MAX_ITER = 200;
+    outerLoop: for (const fast of fastItems) {
+      while (iterations < MAX_ITER) {
+        iterations++;
+        if (totalSpend >= budgetNum * 0.95) break outerLoop;
+        const newCover = ((fast.qty + 1) * fast.upc) / fast.vel;
+        if (newCover > COVER_MAX) break; // Hit cap for this item, move to next
+        fast.qty++;
+        fast.units    = fast.qty * fast.upc;
+        fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
+        fast.cover    = `~${Math.round(newCover)}wk`;
+        totalSpend    = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      }
     }
   }
 
-  const estRevenue = decisions.reduce((s, d) => s + ((parseFloat((d.rrp || "").replace(/[^0-9.]/g, "")) || 0) * (d.units || 0)), 0);
+  const estRevenue = decisions.reduce((s, d) => s + ((d.rrpNum || 0) * (d.units || 0)), 0);
   const estProfit  = Math.round((estRevenue - totalSpend) * 100) / 100;
-  const roi        = totalSpend > 0 ? Math.round((estProfit / totalSpend) * 1000) / 10 : 0;
+  // ROI shown as gross margin % (revenue - cost) / revenue — meaningful regardless of cover period
+  // Falls back to profit/spend if revenue is 0 (missing RRP data)
+  const roi = estRevenue > 0
+    ? Math.round((estProfit / estRevenue) * 1000) / 10   // gross margin %
+    : totalSpend > 0
+      ? Math.round((estProfit / totalSpend) * 1000) / 10  // profit/spend if no revenue data
+      : 0;
 
   return {
     decisions, skips,
@@ -654,7 +684,20 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
 
       extracted.forEach(prod => {
         const { match, candidates, confident: isConfident } = matchPromoToEpos(prod.product_name, prod.rrp, velMap);
-        const rrpNum = parseFloat((prod.rrp || "").replace(/[^0-9.]/g, "")) || 0;
+        const rrpNum = (() => {
+          const raw = (prod.rrp || "").toString().trim();
+          // Try direct float parse after stripping currency symbols and PM/RRP prefix
+          // Handles: "PM£1.40", "PM 1.40", "£1.40", "RRP£1.99", "1.40", "PM140"
+          const cleaned = raw.replace(/[£$€\s]/g, "").replace(/^(PM|RRP|pm|rrp)/i, "");
+          // If it has a decimal point, parse directly: "1.40" → 1.40
+          if (cleaned.includes(".")) return parseFloat(cleaned) || 0;
+          // No decimal — could be "140" meaning £1.40, or "699" meaning £6.99
+          // Heuristic: if number > 99, it's pence notation (divide by 100)
+          const n = parseFloat(cleaned) || 0;
+          if (n === 0) return 0;
+          if (n > 99) return Math.round(n) / 100;
+          return n;
+        })();
         const base   = { ...prod, rrp_num: rrpNum, source: supplier };
 
         if (isConfident) {
@@ -838,7 +881,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <Mini label="Budget" value={fi(result.budget || budget)} />
           <Mini label="Spent"  value={fi(result.totalSpend || 0)} />
-          <Mini label="ROI"    value={`${result.roi || 0}%`} color={C.greenText} />
+          <Mini label="Margin" value={`${result.roi || 0}%`} color={result.roi > 0 ? C.greenText : C.redText} />
           <Mini label="Lines"  value={`${b.length}B / ${t.length}T`} />
         </div>
         {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
