@@ -69,7 +69,9 @@ export function analyzeData(allDays,currentRange,timeRange,prevWeekDays){
     prevItems=aggregateByBarcode(prevWeekDays.flatMap(d=>d.items));
   }
   const prevMap={};prevItems.forEach(i=>{prevMap[i.barcode]=i;});
-  const trending=items.filter(i=>{const prev=prevMap[i.barcode];return i.qty>=3&&prev&&prev.qty>0&&((i.qty-prev.qty)/prev.qty)>=0.4&&i.hasCost&&(i.grossProfit||0)>0.5;}).map(i=>{const prev=prevMap[i.barcode];return{...i,prevQty:prev.qty,trendPct:Math.round(((i.qty-prev.qty)/prev.qty)*100)};}).sort((a,b)=>b.trendPct-a.trendPct).slice(0,15);
+
+  // Trending: includes new products (no previous sales history) that sell 3+ units
+  const trending=items.filter(i=>{const prev=prevMap[i.barcode];const isNew=!prev||prev.qty===0;if(isNew)return i.qty>=3&&i.hasCost&&(i.grossProfit||0)>0.5;return i.qty>=3&&prev.qty>0&&((i.qty-prev.qty)/prev.qty)>=0.4&&i.hasCost&&(i.grossProfit||0)>0.5;}).map(i=>{const prev=prevMap[i.barcode];const isNew=!prev||prev.qty===0;return{...i,prevQty:isNew?0:prev.qty,trendPct:isNew?999:Math.round(((i.qty-prev.qty)/prev.qty)*100)};}).sort((a,b)=>b.trendPct-a.trendPct).slice(0,15);
 
   // Review: below REVIEW_THRESHOLD%, EXCLUDES tobacco
   const review=tracked.filter(i=>!EXCLUDED_REVIEW.includes(i.category)).filter(i=>i.grossMargin!=null&&i.grossMargin<REVIEW_THRESHOLD&&i.grossMargin>=0&&i.qty>=1).sort((a,b)=>(a.grossMargin||0)-(b.grossMargin||0)).slice(0,20);
@@ -129,7 +131,7 @@ function genInsights({totalGross,trackedProfit,trackedMargin,untrackedRev,catego
   if(categories.length>0){const t=categories[0];ins.push({icon:"💰",text:`${t.name} is #1 — £${Math.round(t.gross)} (${t.pctRev.toFixed(0)}%), ${t.margin.toFixed(1)}% margin.`,type:"insight"});}
   const bm=[...categories].filter(c=>c.profit>0).sort((a,b)=>b.margin-a.margin)[0];
   if(bm&&bm.name!==categories[0]?.name)ins.push({icon:"📈",text:`${bm.name} has highest margin (${bm.margin.toFixed(1)}%) — expand range.`,type:"solution"});
-  if(trending.length>0)ins.push({icon:"🔥",text:`${trending[0].product} trending +${trending[0].trendPct}% — check stock.`,type:"insight"});
+  if(trending.length>0)ins.push({icon:"🔥",text:`${trending[0].product} trending${trending[0].trendPct===999?" — brand new!":" +"+trending[0].trendPct+"%"} — check stock.`,type:"insight"});
   if(allDays.length>=3){const dr=allDays.map(d=>({day:d.dates?new Date(d.dates.start+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"}):"?",rev:d.items.reduce((s,i)=>s+i.gross,0)}));const bu=[...dr].sort((a,b)=>b.rev-a.rev)[0];const qu=[...dr].sort((a,b)=>a.rev-b.rev)[0];ins.push({icon:"📊",text:`Busiest: ${bu.day} (£${Math.round(bu.rev)}). Quietest: ${qu.day} (£${Math.round(qu.rev)}).`,type:"insight"});}
   return ins;
 }
@@ -140,7 +142,7 @@ function genActions({untracked,erosion,categories,totalGross,trackedMargin,trend
   if(au.length>0){const t3=au.slice(0,3).map(i=>i.product).join(", ");acts.push({action:`Enter costs: ${t3}`,impact:`Recover £${Math.round(au.slice(0,3).reduce((s,i)=>s+i.gross,0)*(trackedMargin/100))} visibility`,priority:"HIGH",time:"10 min"});}
   const neg=erosion.filter(i=>(i.grossMargin||0)<0);
   if(neg.length>0)acts.push({action:`Check cost: ${neg[0].product} (negative margin)`,impact:"Stop selling at a loss",priority:"HIGH",time:"5 min"});
-  if(trending.length>0)acts.push({action:`Check stock: ${trending[0].product} (+${trending[0].trendPct}%)`,impact:"Don't miss sales",priority:"MED",time:"5 min"});
+  if(trending.length>0){const t=trending[0];acts.push({action:`Check stock: ${t.product}${t.trendPct===999?" (new product)":" (+"+t.trendPct+"%)"}`,impact:"Don't miss sales",priority:"MED",time:"5 min"});}
   const lm=categories.filter(c=>c.margin>0&&c.margin<10&&c.gross>totalGross*0.05&&!EXCLUDED_REVIEW.includes(c.name));
   if(lm.length>0)acts.push({action:`Review pricing: ${lm[0].name} (${lm[0].margin.toFixed(1)}%)`,impact:"Improve margin",priority:"MED",time:"15 min"});
   return acts;
