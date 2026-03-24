@@ -136,53 +136,10 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
   );
 }
 
-// ─── DAY POPUP ──────────────────────────────────────────────────
-function DayPopup({ upload, onClose, onOpenInDashboard }) {
-  const date = new Date(upload.report_date + "T12:00:00");
-  const dateStr = date.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const gross = Number(upload.total_gross || 0);
-  const qty = Number(upload.total_qty || 0);
-  const trans = upload.transactions;
-  const avgBasket = trans && gross ? Math.round((gross / trans) * 100) / 100 : null;
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, border: `1px solid ${C.border}`, borderBottom: "none" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.white, marginBottom: 4 }}>{dateStr}</div>
-            {upload.is_estimated && <Badge type="ALERT">Estimated</Badge>}
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-          {[
-            { label: "Revenue", value: fi(gross), color: C.white },
-            { label: "Items Sold", value: qty.toLocaleString(), color: C.white },
-            ...(trans ? [{ label: "Transactions", value: trans, color: C.white }] : []),
-            ...(avgBasket ? [{ label: "Avg Basket", value: f(avgBasket), color: C.orangeText }] : []),
-          ].map((s, i) => (
-            <div key={i} style={{ padding: "12px 14px", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{s.label}</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</div>
-            </div>
-          ))}
-        </div>
-
-        <button onClick={() => { onOpenInDashboard(upload.report_date); onClose(); }} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-          Open in Dashboard →
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMonth }) {
   const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
-  const [dayPopup, setDayPopup] = useState(null); // upload object for popup
 
   const load = useCallback(async () => {
     if (clientId) { setLoading(true); const u = await loadUploadsMeta(clientId); setUploads(u); setLoading(false); }
@@ -245,16 +202,9 @@ export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMon
       )}
 
       {yearList.map((year) => (
-        <YearUploadGroup key={year.key} year={year} deleting={deleting} onDelete={handleDelete} onViewDay={(u) => setDayPopup(u)} onViewMonth={onViewMonth} />
+        <YearUploadGroup key={year.key} year={year} deleting={deleting} onDelete={handleDelete} onViewDay={(u) => { if (onViewDay) onViewDay(u.report_date); }} onViewMonth={onViewMonth} />
       ))}
 
-      {dayPopup && (
-        <DayPopup
-          upload={dayPopup}
-          onClose={() => setDayPopup(null)}
-          onOpenInDashboard={(date) => { if (onViewDay) onViewDay(date); }}
-        />
-      )}
     </SectionCard>
   );
 }
