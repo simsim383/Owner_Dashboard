@@ -81,7 +81,7 @@ export function CategoriesSection({ analysis, timeRange, onSelectProduct }) {
             </div>
           )}
         </div>
-      );
+        );
       })}
     </SectionCard>
   );
@@ -99,7 +99,7 @@ export function TrendingSection({ analysis, onSelectProduct }) {
         <TableRow key={i} onClick={() => onSelectProduct && onSelectProduct(p)} cells={[
           { v: p.product, flex: 2.5, color: C.white, bold: true },
           { v: p.qty }, { v: p.prevQty, color: C.textMuted },
-          { v: `+${p.trendPct}%`, color: C.greenText, bold: true },
+          { v: p.trendPct === 999 ? "🆕 NEW" : `+${p.trendPct}%`, color: C.greenText, bold: true },
           { v: f(p.grossProfit || 0), color: C.greenText },
         ]} />
       ))}
@@ -160,7 +160,7 @@ export function ReviewSection({ analysis, onSelectProduct }) {
         const targetPrice = cost ? Math.round((cost / (1 - targetMargin / 100)) * 100) / 100 : null;
         const currentProfitUnit = cost ? Math.round((sellPrice - cost) * 100) / 100 : null;
         const targetProfitUnit = cost && targetPrice ? Math.round((targetPrice - cost) * 100) / 100 : null;
-        const weeklyQty = p.qty; // Use current period qty as weekly estimate
+        const weeklyQty = p.qty;
         const currentWeekly = currentProfitUnit != null ? Math.round(currentProfitUnit * weeklyQty * 100) / 100 : null;
         const targetWeekly = targetProfitUnit != null ? Math.round(targetProfitUnit * weeklyQty * 100) / 100 : null;
         const extraWeek = currentWeekly != null && targetWeekly != null ? Math.round((targetWeekly - currentWeekly) * 100) / 100 : null;
@@ -183,37 +183,25 @@ export function ReviewSection({ analysis, onSelectProduct }) {
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.redText, marginBottom: 6 }}>CURRENT</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.white, marginBottom: 4 }}>{f(sellPrice)}</div>
                     <div style={{ fontSize: 11, color: C.textMuted }}>shelf price</div>
-                    <div style={{ fontSize: 11, color: C.redText, marginTop: 6 }}>Profit/unit: {f(currentProfitUnit)}</div>
-                    <div style={{ fontSize: 11, color: C.redText }}>Per week: {f(currentWeekly)}</div>
-                    <div style={{ fontSize: 11, color: C.redText }}>Per year: {fi(currentWeekly * 52)}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{f(currentProfitUnit)} / unit</div>
+                    {currentWeekly != null && <div style={{ fontSize: 11, color: C.textMuted }}>{f(currentWeekly)} / period</div>}
                   </div>
                   <div style={{ background: C.greenDim, borderRadius: 10, padding: 12, border: "1px solid rgba(34,197,94,0.2)" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: C.greenText, marginBottom: 6 }}>AFTER RAISE</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.greenText, marginBottom: 6 }}>TARGET 20%</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.white, marginBottom: 4 }}>{f(targetPrice)}</div>
-                    <div style={{ fontSize: 11, color: C.textMuted }}>target ({targetMargin}% margin)</div>
-                    <div style={{ fontSize: 11, color: C.greenText, marginTop: 6 }}>Profit/unit: {f(targetProfitUnit)}</div>
-                    <div style={{ fontSize: 11, color: C.greenText }}>Per week: {f(targetWeekly)}</div>
-                    <div style={{ fontSize: 11, color: C.greenText }}>Per year: {fi(targetWeekly * 52)}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>shelf price</div>
+                    <div style={{ fontSize: 11, color: C.greenText, marginTop: 6 }}>{f(targetProfitUnit)} / unit</div>
+                    {targetWeekly != null && <div style={{ fontSize: 11, color: C.greenText }}>{f(targetWeekly)} / period</div>}
                   </div>
                 </div>
-                {/* Extra profit summary */}
-                {extraWeek != null && (
-                  <div style={{ background: "rgba(46,80,144,0.12)", borderRadius: 10, padding: 12, border: "1px solid rgba(46,80,144,0.25)", marginBottom: 12 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", textAlign: "center", marginBottom: 8 }}>By raising to {f(targetPrice)}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: 10, color: C.textMuted }}>Extra per week</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{f(extraWeek)}</div>
-                      </div>
-                      <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: 10, color: C.textMuted }}>Extra per year</div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{fi(extraYear)}</div>
-                      </div>
-                    </div>
+                {extraWeek != null && extraWeek > 0 && (
+                  <div style={{ padding: 10, borderRadius: 8, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", fontSize: 12 }}>
+                    <span style={{ color: C.greenText, fontWeight: 700 }}>+{f(extraWeek)}/period · +{fi(extraYear)}/year</span>
+                    <span style={{ color: C.textMuted }}> extra profit</span>
                   </div>
                 )}
-                <div style={{ padding: "8px 0" }}>
-                  <Insight icon="💡" text={`Invoice cost: ${f(cost)}. Target: ${f(cost)} × 1.25 = ${f(targetPrice)}. Update shelf price in ShopMate. A 5-10p rise on staples is rarely noticed.`} />
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+                  Target: {f(cost)} × 1.25 = {f(targetPrice)}. Update shelf price in ShopMate. A 5-10p rise on staples is rarely noticed.
                 </div>
               </div>
             )}
@@ -400,6 +388,9 @@ export function OpsSection({ analysis, allDays }) {
           <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Avg Basket</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.white }}>{avgBasket ? f(avgBasket) : "—"}</div>
         </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
         <div style={{ background: C.greenDim, borderRadius: 10, padding: "12px 10px", textAlign: "center", border: "1px solid rgba(34,197,94,0.2)" }}>
           <div style={{ fontSize: 10, color: C.greenText, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>Busiest</div>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.greenText }}>{busiest.dayName}</div>
