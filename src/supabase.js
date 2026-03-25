@@ -249,3 +249,52 @@ export async function claimOwnerId(id, inviteCode) {
   await sbPost("clients", [{ name: id, owner_name: id }]);
   return { ok: true };
 }
+
+// ─── PROMO SCANS ────────────────────────────────────────────────
+export async function savePromoScan(clientId, scan) {
+  try {
+    const rows = await sbPost("promo_scans", [{ client_id: clientId, ...scan, scanned_at: new Date().toISOString() }]);
+    return { ok: true, data: rows[0] };
+  } catch (e) { console.error("savePromoScan:", e); return { ok: false, error: e.message }; }
+}
+
+export async function loadPromoScans(clientId) {
+  if (!clientId) return [];
+  try { return await sbGet("promo_scans", `client_id=eq.${encodeURIComponent(clientId)}&order=scanned_at.desc&limit=500`); }
+  catch (e) { console.error("loadPromoScans:", e); return []; }
+}
+
+export async function loadPromoDecisions(clientId) {
+  if (!clientId) return [];
+  try { return await sbGet("promo_decisions", `client_id=eq.${encodeURIComponent(clientId)}&order=decided_at.desc&limit=500`); }
+  catch (e) { console.error("loadPromoDecisions:", e); return []; }
+}
+
+export async function loadPromoSkips(clientId) {
+  if (!clientId) return [];
+  try { return await sbGet("promo_skips", `client_id=eq.${encodeURIComponent(clientId)}&order=skipped_at.desc&limit=500`); }
+  catch (e) { console.error("loadPromoSkips:", e); return []; }
+}
+
+export async function loadAllPriceHistory(clientId) {
+  if (!clientId) return [];
+  try { return await sbGet("price_history", `client_id=eq.${encodeURIComponent(clientId)}&order=recorded_at.desc&limit=1000`); }
+  catch (e) { console.error("loadAllPriceHistory:", e); return []; }
+}
+
+export async function updatePromoDecision(clientId, barcode, decision) {
+  try {
+    const existing = await sbGet("promo_decisions", `client_id=eq.${encodeURIComponent(clientId)}&barcode=eq.${encodeURIComponent(barcode)}&limit=1`);
+    if (existing.length > 0) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_decisions?client_id=eq.${encodeURIComponent(clientId)}&barcode=eq.${encodeURIComponent(barcode)}`, {
+        method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
+        body: JSON.stringify({ ...decision, decided_at: new Date().toISOString() }),
+      });
+      if (!r.ok) throw new Error("Failed to update promo decision");
+      return { ok: true };
+    } else {
+      await sbPost("promo_decisions", [{ client_id: clientId, barcode, ...decision, decided_at: new Date().toISOString() }]);
+      return { ok: true };
+    }
+  } catch (e) { console.error("updatePromoDecision:", e); return { ok: false, error: e.message }; }
+}
