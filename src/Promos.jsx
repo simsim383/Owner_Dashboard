@@ -44,10 +44,10 @@ function buildVelocityMap(allDays) {
     const m = monthMap[key];
     const y = yearMap[key];
 
-    const weeklyVel  = w ? w.qty : 0;
+    const weeklyVel  = w ? Math.round((w.qty / Math.max(1, last7.length / 7)) * 10) / 10 : 0;
     const monthlyAvg = m ? Math.round((m.qty / Math.max(1, last28.length / 7)) * 10) / 10 : 0;
     const yearlyAvg  = y ? Math.round((y.qty / Math.max(1, allTime.length / 7)) * 10) / 10 : 0;
-    const isOneOff   = weeklyVel >= 3 && yearlyAvg < 0.5;
+    const isOneOff   = weeklyVel >= 3 && yearlyAvg < 0.5 && monthlyAvg < 1;
 
     let blended;
     if (isOneOff)                         blended = 0;
@@ -326,13 +326,10 @@ function calculateDecisions(matchedProducts, budget) {
 
   const estRevenue = decisions.reduce((s, d) => s + ((d.rrpNum || 0) * (d.units || 0)), 0);
   const estProfit  = Math.round((estRevenue - totalSpend) * 100) / 100;
-  // ROI shown as gross margin % (revenue - cost) / revenue — meaningful regardless of cover period
-  // Falls back to profit/spend if revenue is 0 (missing RRP data)
-  const roi = estRevenue > 0
-    ? Math.round((estProfit / estRevenue) * 1000) / 10   // gross margin %
-    : totalSpend > 0
-      ? Math.round((estProfit / totalSpend) * 1000) / 10  // profit/spend if no revenue data
-      : 0;
+  // ROI = profit / spend × 100 (return on investment)
+  const roi = totalSpend > 0
+    ? Math.round((estProfit / totalSpend) * 1000) / 10
+    : 0;
 
   return {
     decisions, skips,
@@ -881,7 +878,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <Mini label="Budget" value={fi(result.budget || budget)} />
           <Mini label="Spent"  value={fi(result.totalSpend || 0)} />
-          <Mini label="Margin" value={`${result.roi || 0}%`} color={result.roi > 0 ? C.greenText : C.redText} />
+          <Mini label="ROI" value={`${result.roi || 0}%`} color={result.roi > 0 ? C.greenText : C.redText} />
           <Mini label="Lines"  value={`${b.length}B / ${t.length}T`} />
         </div>
         {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
