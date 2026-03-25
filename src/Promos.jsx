@@ -55,13 +55,17 @@ function buildVelocityMap(allDays) {
     else if (weeklyVel < yearlyAvg * 0.5) blended = Math.round(((weeklyVel * 0.2) + (monthlyAvg * 0.3) + (yearlyAvg * 0.5)) * 10) / 10;
     else                                  blended = Math.round(((weeklyVel * 0.4) + (monthlyAvg * 0.35) + (yearlyAvg * 0.25)) * 10) / 10;
 
+    // Spike detection: how inflated is recent vs long-run?
+    const spikeRatio = yearlyAvg > 0 ? Math.round((weeklyVel / yearlyAvg) * 10) / 10 : 0;
+    const isSpiked   = spikeRatio >= 3 && weeklyVel >= 5; // 3x+ above yearly AND meaningful volume
+
     const base       = w || m || y;
     const totalQty   = (m || y)?.qty || 1;
     const totalGross = (m || y)?.gross || 0;
 
     result[key] = {
       product: base.product, barcode: base.barcode, category: base.category,
-      weeklyVel, monthlyAvg, yearlyAvg, blended, isOneOff,
+      weeklyVel, monthlyAvg, yearlyAvg, blended, isOneOff, spikeRatio, isSpiked,
       sellPrice: Math.round((totalGross / totalQty) * 100) / 100,
     };
   });
@@ -225,7 +229,9 @@ function calculateDecisions(matchedProducts, budget) {
 
     const costPerUnitIncVat = (upc > 0 ? cp / upc : cp) * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
-    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || (rrp > 0 ? `£${rrp.toFixed(2)}` : ""), rrpNum: rrp, upc };
+    const spikeRatio = epos?.spikeRatio || 0;
+    const isSpiked   = epos?.isSpiked || false;
+    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || (rrp > 0 ? `£${rrp.toFixed(2)}` : ""), rrpNum: rrp, upc, spikeRatio, isSpiked };
 
     const isOneOff  = epos?.isOneOff || false;
     const yearlyAvg = epos?.yearlyAvg || 0;
@@ -280,23 +286,32 @@ function calculateDecisions(matchedProducts, budget) {
 
   const budgetNum = Number(budget) || 750;
 
-  // ── REBALANCE DOWN: over budget → reduce slowest movers ──
-  // Cap iterations to prevent infinite loops and note spam
+  // ── REBALANCE DOWN: over budget → cut spiked/inflated items first, then highest cover ──
   if (totalSpend > budgetNum * 1.05) {
-    const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
+    // Sort: spiked items first (highest spike ratio), then by cover descending (most overstocked)
+    // This protects proven fast movers and cuts seasonal spikes / overordered items first
+    const buyItems = decisions.filter(d => d.decision === "BUY" && d.qty > 1)
+      .sort((a, b) => {
+        // Spiked items always cut first
+        if (a.isSpiked !== b.isSpiked) return a.isSpiked ? -1 : 1;
+        // Among equals, cut highest cover first (most stock relative to velocity)
+        const aCover = a.vel > 0 ? (a.qty * a.upc) / a.vel : 999;
+        const bCover = b.vel > 0 ? (b.qty * b.upc) / b.vel : 999;
+        return bCover - aCover;
+      });
     let iterations = 0;
-    const MAX_ITER = 200;
+    const MAX_ITER = 300;
     while (totalSpend > budgetNum * 1.05 && buyItems.length > 0 && iterations < MAX_ITER) {
       iterations++;
-      const slowest = buyItems[0];
-      if (slowest.qty > 1) {
-        slowest.qty--;
-        slowest.units    = slowest.qty * slowest.upc;
-        slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
-        slowest.cover    = `~${Math.round(slowest.units / slowest.vel)}wk`;
-        totalSpend       = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      const target = buyItems[0];
+      if (target.qty > 1) {
+        target.qty--;
+        target.units    = target.qty * target.upc;
+        target.totalInc = Math.round(target.casePrice * target.qty * 1.2 * 100) / 100;
+        target.cover    = `~${Math.round(target.units / target.vel)}wk`;
+        totalSpend      = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
       } else {
-        buyItems.shift(); // Can't reduce further, move to next slowest
+        buyItems.shift();
       }
     }
   }
@@ -326,7 +341,8 @@ function calculateDecisions(matchedProducts, budget) {
     if (d.decision === "BUY" && d.vel > 0) {
       const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
       const reduced = d.qty < originalQty ? " [Qty reduced — budget]" : "";
-      d.notes = `${d.vel}/wk blended. ${d.qty} case${d.qty > 1 ? "s" : ""} × ${d.upc} = ${d.units} units = ${d.cover}. ${d.por}% POR.${reduced}`;
+      const spike   = d.isSpiked ? ` ⚠️ SPIKE: ${d.spikeRatio}x above yearly avg — review qty.` : "";
+      d.notes = `${d.vel}/wk blended. ${d.qty} case${d.qty > 1 ? "s" : ""} × ${d.upc} = ${d.units} units = ${d.cover}. ${d.por}% POR.${reduced}${spike}`;
     }
   });
 
@@ -406,6 +422,7 @@ function PromoRow({ item, onEdit, priceHistory }) {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{item.product}</div>
           <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{item.vel != null ? `${item.vel}/wk` : "—"} · {item.por != null ? `${Math.round(Number(item.por))}% POR` : "—"}</div>
+          {item.isSpiked && <div style={{ fontSize: 10, marginTop: 2, color: "#F59E0B", fontWeight: 600 }}>⚠️ {item.spikeRatio}x above yearly avg — possible seasonal spike</div>}
           {item.eposMatch && item.eposMatch !== "No match" && <div style={{ fontSize: 10, color: C.accentLight, marginTop: 1 }}>EPOS: {item.eposMatch}</div>}
           {chg != null && chg !== 0 && <div style={{ fontSize: 10, marginTop: 2, color: chg < 0 ? C.greenText : C.redText, fontWeight: 600 }}>{chg < 0 ? `£${Math.abs(chg).toFixed(2)} CHEAPER` : `£${chg.toFixed(2)} DEARER`} vs last promo</div>}
         </div>
