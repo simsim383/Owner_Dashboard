@@ -226,6 +226,22 @@ async function loadSequential(preloadedUploads) {
   } catch (e) { console.error("Sequential load failed:", e); return []; }
 }
 
+export async function deletePromoScan(scanId) {
+  try {
+    await sbDelete("promo_decisions", `scan_id=eq.${scanId}`);
+    await sbDelete("promo_skips", `scan_id=eq.${scanId}`);
+    await sbDelete("promo_scans", `id=eq.${scanId}`);
+    return { ok: true };
+  } catch (e) { console.error("deletePromoScan:", e); return { ok: false, error: e.message }; }
+}
+
+export async function saveCorrection(clientId, product, type, value) {
+  try {
+    await sbPost("promo_corrections", [{ client_id: clientId, product, type, value, created_at: new Date().toISOString() }]);
+    return { ok: true };
+  } catch (e) { console.error("saveCorrection:", e); return { ok: false, error: e.message }; }
+}
+
 // ─── ONBOARDING ─────────────────────────────────────────────────
 export async function checkInviteCode(code) {
   const rows = await sbGet("invite_codes", `code=eq.${encodeURIComponent(code)}&limit=1`);
@@ -251,10 +267,28 @@ export async function claimOwnerId(id, inviteCode) {
 }
 
 // ─── PROMO SCANS ────────────────────────────────────────────────
-export async function savePromoScan(clientId, scan) {
+export async function savePromoScan(clientId, result, decisions = [], skips = []) {
   try {
-    const rows = await sbPost("promo_scans", [{ client_id: clientId, ...scan, scanned_at: new Date().toISOString() }]);
-    return { ok: true, data: rows[0] };
+    const [scan] = await sbPost("promo_scans", [{
+      client_id: clientId,
+      supplier: result.source || "",
+      total_spend: result.totalSpend || 0,
+      roi: result.roi || 0,
+      buy_count: (decisions || []).filter(d => (d.user_override || d.decision) === "BUY").length,
+      test_count: (decisions || []).filter(d => (d.user_override || d.decision) === "TEST").length,
+      key_insight: result.keyInsight || "",
+      budget: result.budget || 750,
+      created_at: new Date().toISOString(),
+    }]);
+    if (decisions.length > 0) {
+      const decRows = decisions.map(d => ({ client_id: clientId, scan_id: scan.id, product: d.product, case_price: d.casePrice, rrp: d.rrpNum, qty: d.qty, units: d.units, decision: d.decision, user_override: d.user_override || null, user_notes: d.user_notes || null, notes: d.notes || "", vel: d.vel, por: d.por, epos_match: d.eposMatch || "" }));
+      for (let i = 0; i < decRows.length; i += 100) await sbPost("promo_decisions", decRows.slice(i, i + 100));
+    }
+    if (skips.length > 0) {
+      const skipRows = skips.map(s => ({ client_id: clientId, scan_id: scan.id, product: s.product, reason: s.reason }));
+      for (let i = 0; i < skipRows.length; i += 100) await sbPost("promo_skips", skipRows.slice(i, i + 100));
+    }
+    return { ok: true, data: scan };
   } catch (e) { console.error("savePromoScan:", e); return { ok: false, error: e.message }; }
 }
 
