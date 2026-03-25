@@ -217,11 +217,15 @@ function calculateDecisions(matchedProducts, budget) {
     const vel = epos ? epos.blended : 0;
     const cp  = Number(case_price) || 0;
     const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1, product_name);
-    const rrp = Number(rrp_num) || 0;
+    // Use AI-parsed RRP first, fall back to EPOS average sell price if missing
+    const aiRrp   = Number(rrp_num) || 0;
+    const eposSp  = epos?.sellPrice || 0;
+    const rrp     = aiRrp > 0 ? aiRrp : eposSp;
+    const rrpSrc  = aiRrp > 0 ? "leaflet" : eposSp > 0 ? "EPOS" : "none";
 
     const costPerUnitIncVat = (upc > 0 ? cp / upc : cp) * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
-    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || "", rrpNum: rrp, upc };
+    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || (rrp > 0 ? `£${rrp.toFixed(2)}` : ""), rrpNum: rrp, upc };
 
     const isOneOff  = epos?.isOneOff || false;
     const yearlyAvg = epos?.yearlyAvg || 0;
@@ -295,13 +299,6 @@ function calculateDecisions(matchedProducts, budget) {
         buyItems.shift(); // Can't reduce further, move to next slowest
       }
     }
-    // Add a single note on any items that were reduced
-    decisions.forEach(d => {
-      if (d.decision === "BUY") {
-        const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
-        if (d.qty < originalQty) d.notes += " [Qty reduced — budget]";
-      }
-    });
   }
 
   // ── REBALANCE UP: under budget → increase fastest movers ──
@@ -323,6 +320,15 @@ function calculateDecisions(matchedProducts, budget) {
       }
     }
   }
+
+  // ── REBUILD NOTES: after all rebalancing, update notes to reflect final quantities ──
+  decisions.forEach(d => {
+    if (d.decision === "BUY" && d.vel > 0) {
+      const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
+      const reduced = d.qty < originalQty ? " [Qty reduced — budget]" : "";
+      d.notes = `${d.vel}/wk blended. ${d.qty} case${d.qty > 1 ? "s" : ""} × ${d.upc} = ${d.units} units = ${d.cover}. ${d.por}% POR.${reduced}`;
+    }
+  });
 
   const estRevenue = decisions.reduce((s, d) => s + ((d.rrpNum || 0) * (d.units || 0)), 0);
   const estProfit  = Math.round((estRevenue - totalSpend) * 100) / 100;
