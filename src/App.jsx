@@ -9,7 +9,7 @@ import Dashboard from "./Dashboard.jsx";
 import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
-import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
+import { AIChatSection, ComingUpSection, NewsSection, TrendsSection } from "./AI.jsx";
 import LeafletScanner from "./Promos.jsx";
 
 // ─── SETTINGS SECTION ───────────────────────────────────────────
@@ -113,11 +113,12 @@ const monthlySections = [
 const alwaysSections = [
   { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "coming", label: "Coming Up", icon: "📅" },
+  { id: "trends", label: "Trends", icon: "🔥" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Social & viral products" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -334,27 +335,17 @@ export default function App() {
   }, [clientId]);
 
   const handleViewDay = useCallback((date) => {
-    setViewOverrideDay(date);
-    setTimeRange("day");
-    setActiveSection("dashboard");
-    setActiveTab("home");
+    setViewOverrideDay(date); setTimeRange("day"); setActiveSection("dashboard"); setActiveTab("home");
   }, []);
-
   const handleViewMonth = useCallback((monthKey) => {
-    setSelectedMonth(monthKey);
-    setTimeRange("month");
-    setViewOverrideDay(null);
-    setActiveSection("dashboard");
-    setActiveTab("home");
+    setSelectedMonth(monthKey); setTimeRange("month"); setViewOverrideDay(null); setActiveSection("dashboard"); setActiveTab("home");
   }, []);
-
   const handleTimeRangeChange = useCallback((tr) => {
-    setTimeRange(tr);
-    setViewOverrideDay(null);
+    setTimeRange(tr); setViewOverrideDay(null);
   }, []);
 
   const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
-  const [viewOverrideDay, setViewOverrideDay] = useState(null); // pin a specific date from Manage Uploads
+  const [viewOverrideDay, setViewOverrideDay] = useState(null);
 
   // Available months from data
   const availableMonths = useMemo(() => {
@@ -471,6 +462,7 @@ export default function App() {
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
       case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "coming": return <ComingUpSection />;
+      case "trends": return <TrendsSection />;
       case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
       default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
