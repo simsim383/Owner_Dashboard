@@ -10,9 +10,9 @@ import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopS
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
+import LeafletScanner from "./Promos.jsx";
 
 // ─── SETTINGS SECTION ───────────────────────────────────────────
-// CHANGE 1: added onViewDay, onViewMonth props
 function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay, onViewMonth }) {
   const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -40,7 +40,6 @@ function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay,
   if (activeSettings === "uploads") return (
     <div>
       <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
-      {/* CHANGE 2: pass onViewDay and onViewMonth into ManageUploadsSection */}
       <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} onViewDay={onViewDay} onViewMonth={onViewMonth} />
     </div>
   );
@@ -112,12 +111,13 @@ const monthlySections = [
   { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
 ];
 const alwaysSections = [
+  { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "coming", label: "Coming Up", icon: "📅" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -171,6 +171,7 @@ function AuthScreen({ onAuthenticated }) {
       const client = await getOrCreateClient(id);
       if (client) await setPin(client.id, pin);
       saveOwnerId(id);
+      // Load data and authenticate
       onAuthenticated(client.id, client.name || id);
     } catch (e) {
       const msg = e.message || "";
@@ -219,14 +220,19 @@ function AuthScreen({ onAuthenticated }) {
         {mode === "login" && (
           <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Welcome back</div>
+
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
             <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
+
             {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
+
             <button onClick={handleLogin} disabled={loggingIn || !loginId.trim() || loginPin.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: loginId.trim() && loginPin.length === 4 ? C.accentLight : C.surface, color: loginId.trim() && loginPin.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
               {loggingIn ? "Logging in..." : "Log In"}
             </button>
+
             <button onClick={() => { setMode("landing"); setLoginMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
           </div>
         )}
@@ -250,16 +256,22 @@ function AuthScreen({ onAuthenticated }) {
           <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
             <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Create your account</div>
+
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
             <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
+
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
+
             {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
+
             <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
               {saving ? "Creating..." : "Create Account →"}
             </button>
+
             <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
           </div>
         )}
@@ -281,6 +293,7 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [authenticated, setAuthenticated] = useState(false);
 
+  // Called by AuthScreen when login/setup succeeds
   const handleAuthenticated = async (cId, cName) => {
     setClientId(cId); setClientName(cName); setAuthenticated(true);
     setLoading(true);
@@ -320,78 +333,6 @@ export default function App() {
     if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
   }, [clientId]);
 
-  const [selectedMonth, setSelectedMonth] = useState(null);
-  // CHANGE 3: single state to override the "day" view to a specific date
-  const [viewOverrideDay, setViewOverrideDay] = useState(null); // e.g. "2026-01-15"
-
-  // Available months from data
-  const availableMonths = useMemo(() => {
-    const months = {};
-    allDays.forEach(d => {
-      if (!d.dates?.start) return;
-      const m = d.dates.start.slice(0, 7);
-      if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
-      months[m].days.push(d);
-    });
-    return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
-  }, [allDays]);
-
-  const prevMonthKey = useMemo(() => {
-    const d = new Date(); d.setMonth(d.getMonth() - 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  }, []);
-
-  // Current range data — day/week/month logic
-  const currentDays = useMemo(() => {
-    if (!allDays.length) return [];
-    if (timeRange === "day") {
-      // CHANGE 4: if a specific day is pinned from Manage Uploads, show that day
-      if (viewOverrideDay) {
-        const found = allDays.find(d => d.dates?.start === viewOverrideDay);
-        return found ? [found] : [allDays[allDays.length - 1]];
-      }
-      return [allDays[allDays.length - 1]];
-    }
-    if (timeRange === "week") return allDays.slice(-7);
-    const mKey = selectedMonth || prevMonthKey;
-    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
-    return monthDays.length > 0 ? monthDays : allDays;
-  }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
-
-  const currentData = useMemo(() => {
-    if (!currentDays.length) return null;
-    if (timeRange === "day") return currentDays[0];
-    return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
-  }, [currentDays, timeRange]);
-
-  const prevWeekDays = useMemo(() => {
-    if (!allDays.length) return null;
-    if (timeRange === "day") {
-      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
-    }
-    if (timeRange === "month") {
-      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
-      if (!currentMonthKey) return null;
-      const d = new Date(currentMonthKey + "-15");
-      d.setMonth(d.getMonth() - 1);
-      const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
-      return prevDays.length > 0 ? prevDays : null;
-    }
-    return getPrevWeekData(allDays, currentDays);
-  }, [allDays, currentDays, timeRange]);
-
-  const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
-  const isMultiDay = timeRange !== "day";
-  const isMonth = timeRange === "month";
-  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
-  const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
-  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
-
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-
-  // CHANGE 5: handlers called from Manage Uploads View buttons
   const handleViewDay = useCallback((date) => {
     setViewOverrideDay(date);
     setTimeRange("day");
@@ -407,14 +348,87 @@ export default function App() {
     setActiveTab("home");
   }, []);
 
-  // Clear the day override whenever user manually picks a time range
   const handleTimeRangeChange = useCallback((tr) => {
     setTimeRange(tr);
     setViewOverrideDay(null);
   }, []);
 
+  const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+  const [viewOverrideDay, setViewOverrideDay] = useState(null); // pin a specific date from Manage Uploads
+
+  // Available months from data
+  const availableMonths = useMemo(() => {
+    const months = {};
+    allDays.forEach(d => {
+      if (!d.dates?.start) return;
+      const m = d.dates.start.slice(0, 7); // "2026-03"
+      if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
+      months[m].days.push(d);
+    });
+    return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
+  }, [allDays]);
+
+  // Previous complete month key
+  const prevMonthKey = useMemo(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  // Current range data — day/week/month logic
+  const currentDays = useMemo(() => {
+    if (!allDays.length) return [];
+    if (timeRange === "day") {
+      if (viewOverrideDay) { const found = allDays.find(d => d.dates?.start === viewOverrideDay); return found ? [found] : [allDays[allDays.length - 1]]; }
+      return [allDays[allDays.length - 1]];
+    }
+    if (timeRange === "week") return allDays.slice(-7);
+    // Month: use selected month or previous complete month
+    const mKey = selectedMonth || prevMonthKey;
+    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
+    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
+  }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
+
+  const currentData = useMemo(() => {
+    if (!currentDays.length) return null;
+    if (timeRange === "day") return currentDays[0];
+    return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
+  }, [currentDays, timeRange]);
+
+  // Previous period for WoW comparison
+  const prevWeekDays = useMemo(() => {
+    if (!allDays.length) return null;
+    if (timeRange === "day") {
+      // Day mode: return previous day as a single-element array
+      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
+    }
+    if (timeRange === "month") {
+      // Month mode: find the PREVIOUS calendar month's data
+      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
+      if (!currentMonthKey) return null;
+      const d = new Date(currentMonthKey + "-15");
+      d.setMonth(d.getMonth() - 1);
+      const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
+      return prevDays.length > 0 ? prevDays : null;
+    }
+    // Week mode: get the same number of days before
+    return getPrevWeekData(allDays, currentDays);
+  }, [allDays, currentDays, timeRange]);
+
+  const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
+  const isMultiDay = timeRange !== "day";
+  const isMonth = timeRange === "month";
+  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
+  const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
+  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Not authenticated — show login/setup screen
   if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
 
+  // Loading data after auth
   if (loading) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center" }}>
@@ -426,6 +440,7 @@ export default function App() {
     </div>
   );
 
+  // No data — upload screen
   if (!analysis) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary }}>
       <UploadScreen onDataLoaded={addDay} uploads={allDays} />
@@ -442,7 +457,7 @@ export default function App() {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
+      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
       case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
       case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
@@ -454,11 +469,11 @@ export default function App() {
       case "density": return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
+      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "coming": return <ComingUpSection />;
-      // CHANGE 5 (continued): pass onViewDay and onViewMonth into SettingsSection
       case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} />;
+      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
   };
 
@@ -483,7 +498,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Time toggle — uses handleTimeRangeChange to clear viewOverrideDay */}
+        {/* Time toggle */}
         <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
           {timeRanges.map(tr => (
             <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
