@@ -1,596 +1,580 @@
 // ═══════════════════════════════════════════════════════════════════
-// AI — Chat, Coming Up, News
+// APP — Main shell: header, nav, routing
 // ═══════════════════════════════════════════════════════════════════
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { C, Badge, SectionCard, EmptyState, Insight, f, fi, pct } from "./components.jsx";
-import { ANTHROPIC_KEY, AI_MODEL, AI_HDR } from "./config.js";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { C, Stat, SectionCard, EmptyState, ProductDetail, globalCSS, fi, pct } from "./components.jsx";
+import { getSavedOwnerId, saveOwnerId, logout, getOrCreateClient, pushToSupabase, loadFromSupabase, verifyPin, setPin, checkInviteCode, claimOwnerId } from "./supabase.js";
+import { analyzeData, getPrevWeekData } from "./analysis.js";
+import Dashboard from "./Dashboard.jsx";
+import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
+import Search from "./Search.jsx";
+import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
+import { AIChatSection, ComingUpSection, NewsSection, TrendsSection } from "./AI.jsx";
+import LeafletScanner from "./Promos.jsx";
 
-// ─── AI CHAT ────────────────────────────────────────────────────
-export function AIChatSection({ analysis, allDays }) {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const chatRef = useRef();
+// ─── SETTINGS SECTION ───────────────────────────────────────────
+function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay, onViewMonth }) {
+  const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmNewPin, setConfirmNewPin] = useState("");
+  const [pinMsg, setPinMsg] = useState(null);
+  const [savingPin, setSavingPin] = useState(false);
 
-  const systemPrompt = useMemo(() => {
-    const { summary, categories } = analysis;
-    const dailyBreakdown = allDays.map(d => {
-      const g = d.items.reduce((s, i) => s + i.gross, 0);
-      const q = d.items.reduce((s, i) => s + i.qty, 0);
-      const p = d.items.filter(i => i.hasCost).reduce((s, i) => s + (i.grossProfit || 0), 0);
-      const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
-      return `${day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?"} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units, £${p.toFixed(0)} profit${d.transactions ? `, ${d.transactions} trans, £${(g / d.transactions).toFixed(2)} basket` : ""}`;
-    }).join("\n");
-    const catS = categories.slice(0, 15).map(c => `${c.name}: £${c.gross.toFixed(0)} (${c.pctRev.toFixed(0)}%), ${c.margin.toFixed(1)}% margin, ${c.qty} units`).join("\n");
-    const top = [...analysis.items].sort((a, b) => b.gross - a.gross).slice(0, 30).map(i => `${i.product}(${i.category}):qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
-    return `You are an expert retail advisor for a UK convenience store. ${allDays.length} days of data.
+  const handleChangePin = async () => {
+    if (currentPin.length !== 4) { setPinMsg("Enter your current 4-digit PIN"); return; }
+    if (newPin.length !== 4) { setPinMsg("New PIN must be 4 digits"); return; }
+    if (newPin !== confirmNewPin) { setPinMsg("New PINs don't match"); return; }
+    setSavingPin(true); setPinMsg(null);
+    const valid = await verifyPin(clientId, currentPin);
+    if (!valid) { setPinMsg("Current PIN is incorrect"); setSavingPin(false); return; }
+    await setPin(clientId, newPin);
+    setPinMsg("✓ PIN updated successfully");
+    setCurrentPin(""); setNewPin(""); setConfirmNewPin("");
+    setSavingPin(false);
+  };
 
-SUMMARY: £${summary.totalGross.toFixed(0)} rev, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
+  const pinInp = { width: "100%", padding: "14px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 22, fontWeight: 800, letterSpacing: 8, textAlign: "center", outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
 
-DAILY:\n${dailyBreakdown}
+  if (activeSettings === "uploads") return (
+    <div>
+      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
+      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} onViewDay={onViewDay} onViewMonth={onViewMonth} />
+    </div>
+  );
 
-CATEGORIES:\n${catS}
+  if (activeSettings === "pin") return (
+    <SectionCard title="Change PIN" icon="🔑">
+      <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CURRENT PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={currentPin} onChange={e => { setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>NEW PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={newPin} onChange={e => { setNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM NEW PIN</div>
+      <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={confirmNewPin} onChange={e => { setConfirmNewPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setPinMsg(null); }} placeholder="• • • •" />
+      {pinMsg && <div style={{ fontSize: 13, color: pinMsg.startsWith("✓") ? C.greenText : C.redText, marginBottom: 12 }}>{pinMsg}</div>}
+      <button onClick={handleChangePin} disabled={savingPin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: C.accentLight, color: C.white, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>{savingPin ? "Saving..." : "Update PIN"}</button>
+    </SectionCard>
+  );
 
-TOP 30:\n${top}
+  return (
+    <SectionCard title="Settings" icon="⚙️">
+      <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16 }}>Logged in as <strong style={{ color: C.white }}>{clientName}</strong></div>
+      {[
+        { label: "Manage Uploads", sub: "View, delete uploaded data", icon: "📋", action: () => setActiveSettings("uploads") },
+        { label: "Change PIN", sub: "Update your 4-digit PIN", icon: "🔑", action: () => setActiveSettings("pin") },
+      ].map((item, i) => (
+        <div key={i} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginBottom: 8, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, cursor: "pointer" }}>
+          <span style={{ fontSize: 22 }}>{item.icon}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.white }}>{item.label}</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{item.sub}</div>
+          </div>
+          <span style={{ fontSize: 14, color: C.textMuted }}>›</span>
+        </div>
+      ))}
+      <div onClick={() => setConfirmLogout(true)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", marginTop: 16, borderRadius: 12, background: C.redDim, border: "1px solid rgba(239,68,68,0.2)", cursor: "pointer" }}>
+        <span style={{ fontSize: 22 }}>🚪</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.redText }}>Log Out</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Return to login screen</div>
+        </div>
+      </div>
+      {confirmLogout && (
+        <div style={{ marginTop: 16, padding: 16, borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 12 }}>Are you sure you want to log out?</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setConfirmLogout(false)} style={{ flex: 1, padding: "12px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={onLogout} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: C.red, color: C.white, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Log Out</button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
 
-RULES:
-• Use bullet points, bold key numbers
-• Keep under 150 words
-• Lead with the direct answer, then supporting data
-• Reference actual product names and numbers from the data
-• End with one clear action
-• NEVER suggest price increases on price-marked items (any product with "Pm" in its name — e.g. "Pm Coke 500ml")`;
-  }, [analysis, allDays]);
+const baseSections = [
+  { id: "dashboard", label: "Dashboard", icon: "📊" },
+  { id: "cats", label: "Categories", icon: "📦" },
+  { id: "trending", label: "Trending", icon: "📈" },
+  { id: "review", label: "Review", icon: "⚠️" },
+  { id: "topsellers", label: "Top Sellers", icon: "💰" },
+  { id: "erosion", label: "Erosion", icon: "🚨" },
+  { id: "missing", label: "Hidden Profit", icon: "💷" },
+  { id: "ops", label: "Operations", icon: "👥" },
+  { id: "actions", label: "Actions", icon: "✅" },
+];
+const monthlySections = [
+  { id: "density", label: "Shelf Density", icon: "🏪" },
+  { id: "competitor", label: "Competitors", icon: "🏷️" },
+  { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
+];
+const alwaysSections = [
+  { id: "leaflet", label: "Promotions", icon: "🎯" },
+  { id: "coming", label: "Coming Up", icon: "📅" },
+  { id: "trends", label: "Social Media", icon: "🔥" },
+  { id: "settings", label: "Settings", icon: "⚙️" },
+  { id: "ai", label: "AI", icon: "🤖" },
+];
 
-  const send = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = { role: "user", content: input.trim() };
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages); setInput(""); setLoading(true);
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Viral & trending products" };
+
+const bottomNav = [
+  { id: "home", icon: "🏠", label: "Home" },
+  { id: "search", icon: "🔍", label: "Search" },
+  { id: "grid", icon: "⊞", label: "Sections" },
+  { id: "news", icon: "📰", label: "News" },
+];
+
+const timeRanges = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }, { id: "month", label: "Month" }];
+
+// ─── LANDING / LOGIN / SETUP ────────────────────────────────────
+function AuthScreen({ onAuthenticated }) {
+  const [mode, setMode] = useState("landing"); // landing, login, setup-code, setup-id
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteMsg, setInviteMsg] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [ownerId, setOwnerId] = useState("");
+  const [pin, setLocalPin] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
+  const [idMsg, setIdMsg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // Login state
+  const [loginId, setLoginId] = useState(getSavedOwnerId() || "");
+  const [loginPin, setLoginPin] = useState("");
+  const [loginMsg, setLoginMsg] = useState(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  const inp = { width: "100%", padding: "14px 16px", borderRadius: 12, background: C.surface, color: C.white, border: `1.5px solid ${C.border}`, fontSize: 16, outline: "none", fontFamily: "'Inter', sans-serif", boxSizing: "border-box", marginBottom: 12 };
+  const pinInp = { ...inp, letterSpacing: 8, textAlign: "center", fontSize: 22, fontWeight: 800 };
+
+  const handleInvite = async () => {
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) { setInviteMsg("Enter your invite code"); return; }
+    setChecking(true); setInviteMsg(null);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 400, system: systemPrompt, messages: newMessages }),
-      });
-      const data = await res.json();
-      const reply = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "Sorry, I couldn't get a response.";
-      setMessages([...newMessages, { role: "assistant", content: reply }]);
-    } catch (e) { setMessages([...newMessages, { role: "assistant", content: "Error: " + e.message }]); }
-    setLoading(false);
-    setTimeout(() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" }), 100);
+      const result = await checkInviteCode(code);
+      if (result.valid) setMode("setup-id");
+      else setInviteMsg(result.error || "Invalid code");
+    } catch { setInviteMsg("Could not verify — check connection"); }
+    setChecking(false);
+  };
+
+  const handleCreate = async () => {
+    const id = ownerId.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (!id || id.length < 3) { setIdMsg("ID must be at least 3 characters"); return; }
+    if (pin.length !== 4) { setIdMsg("PIN must be 4 digits"); return; }
+    if (pin !== pinConfirm) { setIdMsg("PINs don't match"); return; }
+    setSaving(true); setIdMsg(null);
+    try {
+      await claimOwnerId(id, inviteCode.trim().toUpperCase());
+      const client = await getOrCreateClient(id);
+      if (client) await setPin(client.id, pin);
+      saveOwnerId(id);
+      // Load data and authenticate
+      onAuthenticated(client.id, client.name || id);
+    } catch (e) {
+      const msg = e.message || "";
+      if (msg.includes("taken") || msg.includes("duplicate")) setIdMsg("That ID is taken — try something more specific");
+      else setIdMsg("Setup failed: " + msg);
+    }
+    setSaving(false);
+  };
+
+  const handleLogin = async () => {
+    const id = loginId.trim().toLowerCase();
+    if (!id) { setLoginMsg("Enter your business ID"); return; }
+    if (loginPin.length !== 4) { setLoginMsg("Enter your 4-digit PIN"); return; }
+    setLoggingIn(true); setLoginMsg(null);
+    try {
+      const client = await getOrCreateClient(id);
+      if (!client) { setLoginMsg("Business not found"); setLoggingIn(false); return; }
+      const valid = await verifyPin(client.id, loginPin);
+      if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
+      saveOwnerId(id);
+      onAuthenticated(client.id, client.name || id);
+    } catch (e) { setLoginMsg("Login failed: " + (e.message || "check connection")); }
+    setLoggingIn(false);
   };
 
   return (
-    <SectionCard title="AI Assistant" icon="🤖">
-      {!ANTHROPIC_KEY && <EmptyState msg="Add API key in config.js to enable AI" />}
-      <div ref={chatRef} style={{ maxHeight: 380, overflowY: "auto", marginBottom: 12 }}>
-        {messages.length === 0 && (
-          <div style={{ padding: "16px 0", color: C.textMuted, fontSize: 13, lineHeight: 1.6 }}>
-            Ask anything about your sales data — best sellers, margin analysis, ordering quantities, trends.
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 4 }}>ShopMate Sales</div>
+        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>Owner Dashboard</div>
+
+        {/* ── LANDING ── */}
+        {mode === "landing" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button onClick={() => setMode("login")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: "none", background: C.accentLight, color: C.white, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
+              Log In
+            </button>
+            <button onClick={() => setMode("setup-code")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, color: C.textSecondary, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+              Create Account
+            </button>
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, background: m.role === "user" ? C.accentGlow : C.surface, border: `1px solid ${m.role === "user" ? "rgba(59,111,212,0.2)" : C.border}` }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: m.role === "user" ? C.accentLight : C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{m.role === "user" ? "You" : "AI"}</div>
-            <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.content}</div>
+
+        {/* ── LOGIN ── */}
+        {mode === "login" && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Welcome back</div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
+            <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>PIN</div>
+            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
+
+            {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
+
+            <button onClick={handleLogin} disabled={loggingIn || !loginId.trim() || loginPin.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: loginId.trim() && loginPin.length === 4 ? C.accentLight : C.surface, color: loginId.trim() && loginPin.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
+              {loggingIn ? "Logging in..." : "Log In"}
+            </button>
+
+            <button onClick={() => { setMode("landing"); setLoginMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
           </div>
-        ))}
-        {loading && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, fontSize: 13, color: C.textMuted }}>Thinking...</div>}
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Ask about your data..." style={{ flex: 1, padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "'Inter', sans-serif" }} />
-        <button onClick={send} disabled={loading || !input.trim()} style={{ padding: "12px 18px", borderRadius: 10, border: "none", background: input.trim() ? C.accentLight : C.surface, color: input.trim() ? C.white : C.textMuted, fontSize: 13, fontWeight: 700, alignSelf: "stretch" }}>Send</button>
-      </div>
-    </SectionCard>
-  );
-}
+        )}
 
-// ─── HARDCODED EVENTS DATABASE ───────────────────────────────────
-const EVENTS_2026 = [
-  { date: "2026-04-03", event: "Good Friday", icon: "🐣", rawImpact: "Stock Easter eggs, hot cross buns, alcohol and BBQ essentials. High footfall all day — keep confectionery front of store." },
-  { date: "2026-04-05", event: "Easter Sunday", icon: "🐣", rawImpact: "Family gathering day — chocolate, alcohol, sharing snacks. Push multipacks and premium items." },
-  { date: "2026-04-06", event: "Easter Monday (Bank Holiday)", icon: "🐣", rawImpact: "Last bank holiday of Easter — BBQ weather purchases, snacks, cold drinks. Keep alcohol and confectionery well stocked." },
-  { date: "2026-04-24", event: "Payday (April)", icon: "💰", rawImpact: "Customers spend more freely on payday. Ensure premium products, alcohol, tobacco and treats are well faced up." },
-  { date: "2026-05-04", event: "Early May Bank Holiday", icon: "🏖️", rawImpact: "Long weekend — BBQ items, soft drinks, alcohol, crisps. Footfall spikes on the day." },
-  { date: "2026-05-17", event: "Premier League Final Day", icon: "⚽", rawImpact: "Big viewing occasion — beer, cider, crisps, pizza snacks. Pre-match and half-time trade strong." },
-  { date: "2026-05-23", event: "FA Cup Final", icon: "🏆", rawImpact: "Major national viewing event — stock alcohol, snacks, soft drinks for watching parties." },
-  { date: "2026-05-25", event: "Spring Bank Holiday", icon: "🌸", rawImpact: "Long weekend with half term — BBQ, drinks, snacks. Ensure freezer and drinks chiller are full." },
-  { date: "2026-05-29", event: "Payday (May)", icon: "💰", rawImpact: "Payday uplift — alcohol, tobacco, meal deals and treats. Good week to push premium lines." },
-  { date: "2026-06-06", event: "Champions League Final", icon: "⚽", rawImpact: "Biggest club game of the year — beer, cider, snacks. Stock up the evening before. Multipacks move well." },
-  { date: "2026-06-11", event: "FIFA World Cup Starts", icon: "🌍", rawImpact: "Month-long tournament — sustained uplift on beer, crisps, soft drinks throughout. England games spike trade significantly." },
-  { date: "2026-06-21", event: "Father's Day", icon: "👨", rawImpact: "Stock beer, spirits, snacks. Last-minute buyers peak on the day — keep alcohol visible." },
-  { date: "2026-06-26", event: "Payday (June)", icon: "💰", rawImpact: "Summer payday with World Cup on — alcohol and snacks will be key sellers this week." },
-  { date: "2026-07-04", event: "Wimbledon Finals Weekend", icon: "🎾", rawImpact: "Stock Pimm's, Prosecco, soft drinks. British sporting occasion with strong impulse buying." },
-  { date: "2026-07-19", event: "Schools Break Up", icon: "🎒", rawImpact: "Summer holidays begin — footfall increases through the day. Ice creams, cold drinks, snacks and sweets for kids." },
-  { date: "2026-07-31", event: "Payday (July)", icon: "💰", rawImpact: "First summer holiday payday — alcohol, soft drinks, ice cream, BBQ essentials. World Cup knockouts likely running too." },
-  { date: "2026-08-02", event: "Community Shield", icon: "⚽", rawImpact: "Football returns — beer and snacks. Signals start of football season spending." },
-  { date: "2026-08-15", event: "Premier League Season Starts", icon: "⚽", rawImpact: "Weekly football trade resumes — Saturday beer, crisps and snacks uplift returns for the season." },
-  { date: "2026-08-28", event: "Payday (August)", icon: "💰", rawImpact: "Bank holiday weekend payday — double impact. All categories should be fully stocked." },
-  { date: "2026-08-31", event: "Summer Bank Holiday", icon: "🌞", rawImpact: "Last bank holiday of summer — BBQ, alcohol, cold drinks. Back to school week follows." },
-  { date: "2026-09-05", event: "Back to School", icon: "🎒", rawImpact: "Stock school snacks, lunch fillers, cereal bars, drinks pouches. Morning footfall increases." },
-  { date: "2026-09-25", event: "Payday (September)", icon: "💰", rawImpact: "Autumn payday — spending returns to normal pattern. Alcohol and tobacco stocked for the weekend." },
-  { date: "2026-10-24", event: "Half Term Starts", icon: "🍂", rawImpact: "Week off school — daytime footfall from families. Snacks, sweets, soft drinks up. Start stocking Halloween sweets." },
-  { date: "2026-10-30", event: "Payday (October)", icon: "💰", rawImpact: "Pre-Halloween payday — customers buying sweets, costumes. Best week for confectionery sales." },
-  { date: "2026-10-31", event: "Halloween", icon: "🎃", rawImpact: "Heavy footfall from early afternoon. Keep pick and mix, bags of sweets, chocolate fully stocked throughout." },
-  { date: "2026-11-05", event: "Bonfire Night", icon: "🎆", rawImpact: "Evening trade spike — hot drinks, mulled wine, snacks. Families gathering before and after fireworks." },
-  { date: "2026-11-27", event: "Black Friday & Payday", icon: "🛍️", rawImpact: "Big spending day plus payday — stock premium products, alcohol, tobacco and treats." },
-  { date: "2026-12-05", event: "Christmas Peak Begins", icon: "🎄", rawImpact: "Christmas trade starts in earnest — mince pies, selection boxes, cards, alcohol. Daily footfall increases from here." },
-  { date: "2026-12-24", event: "Christmas Eve", icon: "🎅", rawImpact: "Biggest impulse day of the year — last-minute alcohol, snacks, soft drinks, batteries. Be fully stocked by 8am." },
-  { date: "2026-12-26", event: "Boxing Day (Football)", icon: "⚽", rawImpact: "Full Premier League programme — beer, snacks, soft drinks. Strong afternoon and evening trade." },
-  { date: "2026-12-31", event: "New Year's Eve", icon: "🥂", rawImpact: "Stock Prosecco, Champagne, beer, cider, snacks. Trade builds from mid-afternoon. Top 5 alcohol day of the year." },
-];
-
-function calcDays(dateStr) {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return Math.round((new Date(dateStr + "T00:00:00") - today) / 86400000);
-}
-function getPriority(n) {
-  if (n < 0) return null;
-  if (n <= 3) return "URGENT";
-  if (n <= 14) return "PLAN";
-  return "AWARE";
-}
-function getUpcoming() {
-  return EVENTS_2026
-    .map(e => ({ ...e, daysAway: calcDays(e.date) }))
-    .filter(e => e.daysAway >= 0 && e.daysAway <= 60)
-    .sort((a, b) => a.daysAway - b.daysAway)
-    .slice(0, 8);
-}
-function fmtDays(n) { return n === 0 ? "TODAY" : n === 1 ? "Tomorrow" : `${n} days`; }
-function fmtDate(s) { return new Date(s + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); }
-
-// ─── COMING UP ──────────────────────────────────────────────────
-export function ComingUpSection() {
-  const [tick, setTick] = useState(0);
-  const [impacts, setImpacts] = useState({});
-  const [loadingImpacts, setLoadingImpacts] = useState(false);
-
-  const events = useMemo(() => getUpcoming(), [tick]);
-
-  const generateImpacts = useCallback(async () => {
-    if (!ANTHROPIC_KEY || events.length === 0) return;
-    setLoadingImpacts(true);
-    try {
-      const list = events.map(e => `- ${e.event} (${fmtDate(e.date)}, ${fmtDays(e.daysAway)}): ${e.rawImpact}`).join("\n");
-      const prompt = `You are a stock advisor for a UK Londis convenience store in County Durham (working class area, loyal regulars).
-
-For each upcoming event, write ONE punchy sentence (max 12 words) of the most important specific stock advice.
-
-Events:
-${list}
-
-Respond ONLY with a JSON object: {"event name": "stock advice", ...}. No markdown, no backticks.`;
-
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
-      });
-      if (!res.ok) { setLoadingImpacts(false); return; }
-      const data = await res.json();
-      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      try { setImpacts(JSON.parse(clean)); } catch { /* use rawImpact fallback */ }
-    } catch (e) { console.error("Coming Up impacts:", e); }
-    setLoadingImpacts(false);
-  }, [events]);
-
-  useEffect(() => { generateImpacts(); }, [tick]);
-
-  return (
-    <SectionCard title="Coming Up" icon="📅">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontSize: 12, color: C.textMuted }}>Next events · refresh to update days</div>
-        <button onClick={() => setTick(t => t + 1)} style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>↻ Refresh</button>
-      </div>
-      {events.length === 0 && <EmptyState msg="No upcoming events in the next 60 days" />}
-      {events.map((e, i) => {
-        const priority = getPriority(e.daysAway);
-        const impact = impacts[e.event] || e.rawImpact;
-        return (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "12px 14px", marginBottom: 6, borderRadius: 10, background: priority === "URGENT" ? "rgba(239,68,68,0.06)" : C.surface, border: `1px solid ${priority === "URGENT" ? "rgba(239,68,68,0.2)" : C.border}` }}>
-            <div style={{ flex: 1, marginRight: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                <span style={{ fontSize: 16 }}>{e.icon}</span>
-                <span style={{ fontSize: 13, color: C.white, fontWeight: 700 }}>{e.event}</span>
-              </div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>
-                {fmtDate(e.date)} · <span style={{ color: priority === "URGENT" ? C.redText : priority === "PLAN" ? C.orangeText : C.textMuted, fontWeight: 600 }}>{fmtDays(e.daysAway)}</span>
-              </div>
-              <div style={{ fontSize: 11, color: C.textSecondary, lineHeight: 1.5 }}>
-                {loadingImpacts && !impacts[e.event] ? "Loading advice..." : impact}
-              </div>
-            </div>
-            <Badge type={priority === "URGENT" ? "ALERT" : priority === "PLAN" ? "MED" : "OK"}>{priority}</Badge>
+        {/* ── SETUP: INVITE CODE ── */}
+        {mode === "setup-code" && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 6 }}>Enter your invite code</div>
+            <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.5 }}>Each code can only be used once to create one account.</div>
+            <input style={{ ...inp, textTransform: "uppercase", letterSpacing: 2, fontWeight: 700 }} value={inviteCode} onChange={e => { setInviteCode(e.target.value.toUpperCase()); setInviteMsg(null); }} onKeyDown={e => { if (e.key === "Enter") handleInvite(); }} placeholder="e.g. HORDEN-2026" autoFocus />
+            {inviteMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{inviteMsg}</div>}
+            <button onClick={handleInvite} disabled={checking || !inviteCode.trim()} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: inviteCode.trim() ? C.accentLight : C.surface, color: inviteCode.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
+              {checking ? "Checking..." : "Continue →"}
+            </button>
+            <button onClick={() => { setMode("landing"); setInviteMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
           </div>
-        );
-      })}
-    </SectionCard>
-  );
-}
+        )}
 
-// ─── NEWS ───────────────────────────────────────────────────────
-// RSS feeds via rss2json.com — free tier, no API key needed
-// Sources chosen for rss2json compatibility and UK retail relevance
+        {/* ── SETUP: CHOOSE ID + PIN ── */}
+        {mode === "setup-id" && (
+          <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
+            <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Create your account</div>
 
-const RSS_FEEDS = [
-  {
-    name: "Better Retailing",
-    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fbetterretailing.com%2Ffeed",
-    color: "#16a34a",
-  },
-  {
-    name: "Retail Gazette",
-    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.retailgazette.co.uk%2Ffeed",
-    color: "#2563eb",
-  },
-  {
-    name: "Talking Retail",
-    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.talkingretail.com%2Ffeed",
-    color: "#9333ea",
-  },
-];
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
+            <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
 
-function timeAgo(dateStr) {
-  if (!dateStr) return "";
-  const mins = Math.round((Date.now() - new Date(dateStr)) / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
+            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
 
-function stripHtml(str) {
-  return (str || "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
-}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
+            <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
 
-export function NewsSection() {
-  const [articles, setArticles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [feedStatus, setFeedStatus] = useState({});
+            {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
 
-  const fetchNews = useCallback(async () => {
-    setLoading(true); setError(false);
-    const status = {};
-    try {
-      const results = await Promise.allSettled(
-        RSS_FEEDS.map(feed =>
-          fetch(feed.url)
-            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-            .then(data => {
-              if (data.status !== "ok") throw new Error(data.message || "Feed error");
-              status[feed.name] = { ok: true, count: data.items?.length || 0 };
-              return (data.items || []).slice(0, 5).map(item => ({
-                title: stripHtml(item.title),
-                summary: stripHtml(item.description || item.content || "").slice(0, 140) + "…",
-                url: item.link,
-                source: feed.name,
-                sourceColor: feed.color,
-                pubDate: item.pubDate,
-                timeAgo: timeAgo(item.pubDate),
-              }));
-            })
-            .catch(e => { status[feed.name] = { ok: false, error: e.message }; return []; })
-        )
-      );
+            <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
+              {saving ? "Creating..." : "Create Account →"}
+            </button>
 
-      const all = results
-        .flatMap(r => r.status === "fulfilled" ? r.value : [])
-        .filter(a => a.title)
-        .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-        .slice(0, 12);
-
-      setFeedStatus(status);
-      if (all.length === 0) { setError(true); } else { setArticles(all); }
-      setLastUpdated(new Date());
-    } catch (e) {
-      console.error("News fetch:", e);
-      setError(true);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { fetchNews(); }, []);
-
-  const workingFeeds = RSS_FEEDS.filter(f => feedStatus[f.name]?.ok !== false);
-
-  return (
-    <div style={{ paddingTop: 4 }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: -0.3 }}>Retail News</div>
-          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-            {lastUpdated ? `Updated ${timeAgo(lastUpdated.toISOString())}` : "UK convenience & grocery"}
+            <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
           </div>
-        </div>
-        <button onClick={fetchNews} disabled={loading} style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
-          {loading ? "..." : "↻ Refresh"}
-        </button>
+        )}
       </div>
-
-      {/* Source badges — show green/grey based on feed health */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-        {RSS_FEEDS.map(f => {
-          const ok = feedStatus[f.name]?.ok !== false;
-          return (
-            <div key={f.name} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: ok ? f.color + "20" : "rgba(100,116,139,0.1)", color: ok ? f.color : C.textMuted, border: `1px solid ${ok ? f.color + "40" : C.border}` }}>
-              {ok ? "" : "✕ "}{f.name}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Skeleton loading */}
-      {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} style={{ padding: "16px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <div style={{ height: 8, width: 80, borderRadius: 4, background: C.surface }} />
-                <div style={{ height: 8, width: 40, borderRadius: 4, background: C.surface, marginLeft: "auto" }} />
-              </div>
-              <div style={{ height: 14, width: "95%", borderRadius: 4, background: C.surface, marginBottom: 6 }} />
-              <div style={{ height: 14, width: "70%", borderRadius: 4, background: C.surface, marginBottom: 8 }} />
-              <div style={{ height: 10, width: "85%", borderRadius: 4, background: C.surface }} />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Error state */}
-      {error && !loading && (
-        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
-          <div style={{ fontSize: 13, color: C.white, fontWeight: 600, marginBottom: 4 }}>Could not load news</div>
-          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>Check your connection and try again</div>
-          <button onClick={fetchNews} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Try Again</button>
-        </div>
-      )}
-
-      {/* Articles */}
-      {!loading && !error && articles.map((item, i) => (
-        <a key={i} href={item.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none", display: "block", marginBottom: 8 }}>
-          <div style={{ padding: "14px 16px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: item.sourceColor, flexShrink: 0 }} />
-                <span style={{ fontSize: 10, fontWeight: 800, color: item.sourceColor, textTransform: "uppercase", letterSpacing: 0.8 }}>{item.source}</span>
-              </div>
-              <span style={{ fontSize: 10, color: C.textMuted }}>{item.timeAgo}</span>
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.white, lineHeight: 1.4, marginBottom: 6 }}>{item.title}</div>
-            {item.summary && item.summary.length > 3 && (
-              <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.5, marginBottom: 8 }}>{item.summary}</div>
-            )}
-            <div style={{ fontSize: 11, color: item.sourceColor, fontWeight: 600 }}>Read more →</div>
-          </div>
-        </a>
-      ))}
-
-      {!loading && !error && articles.length > 0 && (
-        <div style={{ textAlign: "center", padding: "12px 0", fontSize: 11, color: C.textMuted }}>
-          {articles.length} stories · {workingFeeds.length}/{RSS_FEEDS.length} sources live
-        </div>
-      )}
+      <style>{globalCSS}</style>
     </div>
   );
 }
 
-// ─── TRENDS ─────────────────────────────────────────────────────
-// Social & viral product trends for UK convenience stores
-// Uses Claude web search (once per day, cached in localStorage)
-
-const TRENDS_CACHE_KEY = "shopmate_trends_cache";
-const TRENDS_TTL = 23 * 60 * 60 * 1000; // 23 hours
-
-function getTrendsCache() {
-  try {
-    const raw = localStorage.getItem(TRENDS_CACHE_KEY);
-    if (!raw) return null;
-    const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > TRENDS_TTL) return null;
-    return data;
-  } catch { return null; }
-}
-
-function setTrendsCache(data) {
-  try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
-}
-
-const HEAT_CONFIG = {
-  "🔥 Viral now":    { bg: "rgba(239,68,68,0.08)",   border: "rgba(239,68,68,0.25)",   color: "#ef4444" },
-  "📈 Building":     { bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)",   color: "#f59e0b" },
-  "👀 Watch this":   { bg: "rgba(59,130,246,0.08)",   border: "rgba(59,130,246,0.25)",   color: "#3b82f6" },
-};
-
-const STOCK_CONFIG = {
-  "YES":   { bg: "rgba(34,197,94,0.12)",  color: "#22c55e", label: "✓ Stock it" },
-  "MAYBE": { bg: "rgba(245,158,11,0.12)", color: "#f59e0b", label: "? Consider" },
-  "NICHE": { bg: "rgba(100,116,139,0.12)",color: "#94a3b8", label: "◦ Niche" },
-};
-
-function TrendCard({ trend }) {
-  const [open, setOpen] = useState(false);
-  const heat   = HEAT_CONFIG[trend.heat]   || HEAT_CONFIG["👀 Watch this"];
-  const stock  = STOCK_CONFIG[trend.stock] || STOCK_CONFIG["MAYBE"];
-
-  return (
-    <div style={{ marginBottom: 8, borderRadius: 12, border: `1px solid ${heat.border}`, background: heat.bg, overflow: "hidden" }}>
-      {/* Header row */}
-      <div onClick={() => setOpen(o => !o)} style={{ padding: "12px 14px", cursor: "pointer" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-          <div style={{ flex: 1, marginRight: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#ffffff", marginBottom: 3 }}>{trend.product}</div>
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>{trend.category}</div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: heat.color, whiteSpace: "nowrap" }}>{trend.heat}</div>
-            <div style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: stock.bg, color: stock.color }}>{stock.label}</div>
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.5 }}>{trend.why}</div>
-      </div>
-
-      {/* Expanded detail */}
-      {open && (
-        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${heat.border}`, paddingTop: 12, marginTop: 0 }}>
-          {trend.recommendation && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Should you stock it?</div>
-              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.recommendation}</div>
-            </div>
-          )}
-          {trend.source && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Where to source</div>
-              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.source}</div>
-            </div>
-          )}
-          {trend.examples && (
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Specific products</div>
-              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.examples}</div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function TrendsSection() {
-  const [trends, setTrends]   = useState(null);
+export default function App() {
+  const [allDays, setAllDays] = useState([]);
+  const [activeSection, setActiveSection] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState("home");
+  const [timeRange, setTimeRange] = useState("day");
+  const [clientId, setClientId] = useState(null);
+  const [clientName, setClientName] = useState("");
+  const [sbStatus, setSbStatus] = useState("");
   const [loading, setLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [error, setError]     = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [authenticated, setAuthenticated] = useState(false);
 
-  const fetchTrends = async (force = false) => {
-    if (!force) {
-      const cached = getTrendsCache();
-      if (cached) { setTrends(cached.trends); setLastUpdated(new Date(cached.ts)); return; }
-    }
-    if (!ANTHROPIC_KEY) { setTrends([]); return; }
-    setLoading(true); setError(false);
-
-    const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-    const prompt = `Today is ${today}. You are a retail trend advisor for a UK Londis convenience store in County Durham.
-
-Search the web for what is currently going viral or trending in the UK that a corner shop should know about. Focus on:
-- TikTok viral food and drink products in the UK
-- Viral lifestyle/collectible products relevant to a corner shop (e.g. Labubu, Stanley cups, fidget toys)
-- New product launches trending on social media in the UK
-- "Corner shop haul" type viral content
-- UK food trends from Instagram Reels and YouTube Shorts
-- Anything on UK Twitter/X trending in food, drink or retail
-
-Return 6-8 trends. For each, provide:
-- product: The specific product name (e.g. "Echo Falls Blue Raspberry", "Labubu plush toys", "Prime Hydration")
-- category: Short category tag (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬")
-- why: 1-2 sentences on WHY it's trending and what the social media buzz is about
-- heat: One of exactly: "🔥 Viral now", "📈 Building", "👀 Watch this"
-- stock: One of exactly: "YES", "MAYBE", "NICHE"
-- recommendation: 1-2 sentences on whether a UK corner shop should stock it and why
-- source: Where to get it — be specific e.g. "Booker, Costco" or "Amazon wholesale" or "Specialist importer — not mainstream yet"
-- examples: 2-3 specific product variants or SKUs if known, e.g. "Echo Falls Blue Raspberry 75cl, 187ml"
-
-Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.`;
-
+  // Called by AuthScreen when login/setup succeeds
+  const handleAuthenticated = async (cId, cName) => {
+    setClientId(cId); setClientName(cName); setAuthenticated(true);
+    setLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: AI_HDR,
-        body: JSON.stringify({
-          model: AI_MODEL, max_tokens: 2000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
-      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const j1 = clean.indexOf("["); const j2 = clean.lastIndexOf("]");
-      if (j1 < 0) throw new Error("No trends found");
-      const parsed = JSON.parse(clean.slice(j1, j2 + 1));
-      const ts = Date.now();
-      setTrendsCache({ trends: parsed, ts });
-      setTrends(parsed);
-      setLastUpdated(new Date(ts));
-    } catch (e) {
-      console.error("Trends fetch:", e);
-      setError(true);
-    }
+      const days = await loadFromSupabase(cId);
+      if (days.length > 0) setAllDays(days);
+      setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
+    } catch (e) { setSbStatus("Error: " + e.message); }
     setLoading(false);
   };
 
-  useEffect(() => { fetchTrends(false); }, []);
+  const handleLogout = () => {
+    logout();
+    setAuthenticated(false); setClientId(null); setClientName("");
+    setAllDays([]); setActiveSection("dashboard"); setActiveTab("home");
+  };
 
-  const cacheAge = lastUpdated ? Math.round((Date.now() - lastUpdated) / 3600000) : null;
-  const ageLabel = cacheAge === 0 ? "Updated just now" : cacheAge === 1 ? "Updated 1 hour ago" : cacheAge != null ? `Updated ${cacheAge}h ago` : "UK social & viral products";
+  const addDay = useCallback(async (data, uploadType, transactions) => {
+    if (clientId) {
+      setSbStatus("Saving...");
+      const result = await pushToSupabase(clientId, data, uploadType || "day", transactions);
+      if (result.ok) {
+        setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
+        const days = await loadFromSupabase(clientId); setAllDays(days);
+      } else { setSbStatus(`✗ ${result.error}`); }
+      setTimeout(() => setSbStatus(""), 4000);
+    } else {
+      setAllDays(prev => {
+        if (prev.find(d => d.dates?.start === data.dates?.start)) return prev.map(d => d.dates?.start === data.dates?.start ? data : d);
+        return [...prev, data].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+      });
+    }
+    setActiveTab("home"); setActiveSection("dashboard");
+  }, [clientId]);
+
+  const refreshData = useCallback(async () => {
+    if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
+  }, [clientId]);
+
+  const handleViewDay = useCallback((date) => {
+    setViewOverrideDay(date); setTimeRange("day"); setActiveSection("dashboard"); setActiveTab("home");
+  }, []);
+  const handleViewMonth = useCallback((monthKey) => {
+    setSelectedMonth(monthKey); setTimeRange("month"); setViewOverrideDay(null); setActiveSection("dashboard"); setActiveTab("home");
+  }, []);
+  const handleTimeRangeChange = useCallback((tr) => {
+    setTimeRange(tr); setViewOverrideDay(null);
+  }, []);
+
+  const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+  const [viewOverrideDay, setViewOverrideDay] = useState(null);
+
+  // Available months from data
+  const availableMonths = useMemo(() => {
+    const months = {};
+    allDays.forEach(d => {
+      if (!d.dates?.start) return;
+      const m = d.dates.start.slice(0, 7); // "2026-03"
+      if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
+      months[m].days.push(d);
+    });
+    return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
+  }, [allDays]);
+
+  // Previous complete month key
+  const prevMonthKey = useMemo(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  // Current range data — day/week/month logic
+  const currentDays = useMemo(() => {
+    if (!allDays.length) return [];
+    if (timeRange === "day") {
+      if (viewOverrideDay) { const found = allDays.find(d => d.dates?.start === viewOverrideDay); return found ? [found] : [allDays[allDays.length - 1]]; }
+      return [allDays[allDays.length - 1]];
+    }
+    if (timeRange === "week") return allDays.slice(-7);
+    // Month: use selected month or previous complete month
+    const mKey = selectedMonth || prevMonthKey;
+    const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
+    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
+  }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
+
+  const currentData = useMemo(() => {
+    if (!currentDays.length) return null;
+    if (timeRange === "day") return currentDays[0];
+    return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
+  }, [currentDays, timeRange]);
+
+  // Previous period for WoW comparison
+  const prevWeekDays = useMemo(() => {
+    if (!allDays.length) return null;
+    if (timeRange === "day") {
+      // Day mode: return previous day as a single-element array
+      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
+    }
+    if (timeRange === "month") {
+      // Month mode: find the PREVIOUS calendar month's data
+      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
+      if (!currentMonthKey) return null;
+      const d = new Date(currentMonthKey + "-15");
+      d.setMonth(d.getMonth() - 1);
+      const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
+      return prevDays.length > 0 ? prevDays : null;
+    }
+    // Week mode: get the same number of days before
+    return getPrevWeekData(allDays, currentDays);
+  }, [allDays, currentDays, timeRange]);
+
+  const rangeLabel = timeRange === "day" ? "Today" : timeRange === "week" ? "This Week" : "This Month";
+  const isMultiDay = timeRange !== "day";
+  const isMonth = timeRange === "month";
+  const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
+  const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
+  const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
+
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Not authenticated — show login/setup screen
+  if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+
+  // Loading data after auth
+  if (loading) return (
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 28, marginBottom: 12 }}>📊</div>
+        <div style={{ fontSize: 15, color: C.white, fontWeight: 600 }}>Loading...</div>
+        <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Connecting to your business</div>
+      </div>
+      <style>{globalCSS}</style>
+    </div>
+  );
+
+  // No data — upload screen
+  if (!analysis) return (
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary }}>
+      <UploadScreen onDataLoaded={addDay} uploads={allDays} />
+      <style>{globalCSS}</style>
+    </div>
+  );
+
+  const { summary } = analysis;
+  const dateLabel = currentData.dates ? (timeRange === "day"
+    ? new Date(currentData.dates.start + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+    : `${allDays.length} days`) : "";
+
+  const handleSelectProduct = (product) => setSelectedProduct(product);
+
+  const renderSection = () => {
+    switch (activeSection) {
+      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
+      case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "topsellers": return <TopSellersSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "erosion": return <ErosionSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "missing": return <HiddenProfitSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "ops": return <OpsSection analysis={analysis} allDays={currentDays} />;
+      case "actions": return <ActionsSection analysis={analysis} />;
+      case "density": return <ShelfDensitySection analysis={analysis} />;
+      case "competitor": return <CompetitorPricingSection analysis={analysis} />;
+      case "clearshelf": return <ClearShelfSection analysis={analysis} />;
+      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
+      case "coming": return <ComingUpSection />;
+      case "trends": return <TrendsSection />;
+      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
+      case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
+      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+    }
+  };
 
   return (
-    <div style={{ paddingTop: 4 }}>
+    <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "fixed", top: -150, right: -100, width: 400, height: 400, background: "radial-gradient(circle, rgba(46,80,144,0.15) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
-        </div>
-        <button onClick={() => fetchTrends(true)} disabled={loading} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: "#64748b", fontSize: 11, fontWeight: 600, cursor: loading ? "default" : "pointer", opacity: loading ? 0.5 : 1 }}>
-          {loading ? "..." : "↻ Refresh"}
-        </button>
-      </div>
-
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {Object.entries(HEAT_CONFIG).map(([label, cfg]) => (
-          <div key={label} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>
-            {label}
-          </div>
-        ))}
-      </div>
-
-      {/* Loading skeletons */}
-      {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {[1,2,3,4].map(i => (
-            <div key={i} style={{ padding: 14, borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
-              <div style={{ height: 14, width: "60%", borderRadius: 4, background: "#1e293b", marginBottom: 8 }} />
-              <div style={{ height: 10, width: "90%", borderRadius: 4, background: "#1e293b", marginBottom: 6 }} />
-              <div style={{ height: 10, width: "70%", borderRadius: 4, background: "#1e293b" }} />
+      <div style={{ padding: "20px 20px 12px", position: "relative", zIndex: 1, background: "linear-gradient(180deg, rgba(46,80,144,0.08) 0%, transparent 100%)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 900, color: C.white }}>S</div>
+              <span style={{ fontSize: 16, fontWeight: 800, color: C.white, letterSpacing: 0.5 }}>ShopMate Sales</span>
             </div>
+            <div style={{ fontSize: 14, color: C.textSecondary }}>{greeting}{clientName ? `, ${clientName}` : ""}</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{dateLabel} · {allDays.length} day{allDays.length !== 1 ? "s" : ""}{sbStatus ? ` · ${sbStatus}` : ""}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+            <div style={{ padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: C.greenDim, color: C.greenText, border: "1px solid rgba(34,197,94,0.2)" }}>● LIVE</div>
+            <button onClick={() => setActiveTab("upload")} style={{ padding: "5px 12px", borderRadius: 8, background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Upload</button>
+          </div>
+        </div>
+
+        {/* Time toggle */}
+        <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
+          {timeRanges.map(tr => (
+            <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
+              {tr.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Month selector — only when in month mode */}
+        {isMonth && availableMonths.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
+              {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Mini KPI bar */}
+        <div style={{ display: "flex", gap: 8, padding: "14px 16px", borderRadius: 12, background: `linear-gradient(135deg, ${C.card}, rgba(46,80,144,0.1))`, border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>
+          <Stat label="Revenue" value={fi(summary.totalGross)} small />
+          <div style={{ width: 1, background: C.border }} />
+          <Stat label="Profit" value={fi(summary.trackedProfit)} small />
+          <div style={{ width: 1, background: C.border }} />
+          <Stat label="Margin" value={pct(summary.trackedMargin)} small />
+        </div>
+      </div>
+
+      {/* Nav pills */}
+      {activeTab === "home" && (
+        <div style={{ display: "flex", gap: 6, padding: "12px 20px", overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", position: "relative", zIndex: 1 }}>
+          {sectionList.map(s => (
+            <button key={s.id} onClick={() => setActiveSection(s.id)} style={{ padding: "7px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", transition: "all 0.2s", background: activeSection === s.id ? C.accentLight : C.card, color: activeSection === s.id ? C.white : C.textMuted, boxShadow: activeSection === s.id ? "0 2px 12px rgba(59,111,212,0.3)" : "none" }}>
+              {s.icon} {s.label}
+            </button>
           ))}
         </div>
       )}
 
-      {/* Error */}
-      {error && !loading && (
-        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
-          <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
-          <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 600, marginBottom: 4 }}>Could not load trends</div>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>Check connection and try again</div>
-          <button onClick={() => fetchTrends(true)} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#3b6fd4", color: "#ffffff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Try Again</button>
+      {/* Content */}
+      <div style={{ padding: "8px 16px 100px", position: "relative", zIndex: 1 }}>
+        {activeTab === "home" && renderSection()}
+        {activeTab === "search" && <Search analysis={analysis} onSelectProduct={handleSelectProduct} />}
+        {activeTab === "grid" && (
+          <div style={{ padding: "8px 0" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.white, marginBottom: 16, paddingLeft: 4 }}>Sections</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {sectionGrid.map(s => (
+                <button key={s.id} onClick={() => { setActiveSection(s.id); setActiveTab("home"); }} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 14px", textAlign: "left", cursor: "pointer" }}>
+                  <span style={{ fontSize: 26, display: "block", marginBottom: 8 }}>{s.icon}</span>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.white, marginBottom: 4 }}>{s.label}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.3 }}>{s.sub}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {activeTab === "news" && <NewsSection />}
+        {activeTab === "upload" && <UploadScreen onDataLoaded={addDay} uploads={allDays} onCancel={() => { setActiveTab("home"); setActiveSection("dashboard"); }} />}
+      </div>
+
+      {/* Bottom nav */}
+      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, zIndex: 10, background: `linear-gradient(180deg, transparent, ${C.bg} 20%)`, padding: "20px 16px 12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "12px 0", borderRadius: 20, background: C.card, border: `1px solid ${C.border}`, boxShadow: "0 -4px 24px rgba(0,0,0,0.4)" }}>
+          {bottomNav.map(n => (
+            <button key={n.id} onClick={() => { setActiveTab(n.id); if (n.id === "home") setActiveSection("dashboard"); }} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, opacity: activeTab === n.id ? 1 : 0.5, transition: "opacity 0.2s" }}>
+              <span style={{ fontSize: n.id === "grid" ? 24 : 22 }}>{n.icon}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, color: activeTab === n.id ? C.accentLight : C.textMuted }}>{n.label}</span>
+            </button>
+          ))}
         </div>
+      </div>
+
+      {/* Product Detail Overlay */}
+      {selectedProduct && (
+        <ProductDetail
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          allDays={allDays}
+          currentDays={currentDays}
+          timeRange={rangeLabel}
+        />
       )}
 
-      {!ANTHROPIC_KEY && !loading && (
-        <div style={{ padding: 20, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b", fontSize: 12, color: "#64748b" }}>
-          API key required to load trends
-        </div>
-      )}
-
-      {/* Trend cards */}
-      {!loading && trends && trends.map((t, i) => <TrendCard key={i} trend={t} />)}
-
-      {!loading && trends && trends.length > 0 && (
-        <div style={{ textAlign: "center", padding: "12px 0", fontSize: 11, color: "#475569" }}>
-          {trends.length} trends · tap any card to expand · refreshes daily
-        </div>
-      )}
+      <style>{globalCSS}</style>
     </div>
   );
 }
