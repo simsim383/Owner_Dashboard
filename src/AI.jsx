@@ -380,3 +380,217 @@ export function NewsSection() {
     </div>
   );
 }
+
+// ─── TRENDS ─────────────────────────────────────────────────────
+// Social & viral product trends for UK convenience stores
+// Uses Claude web search (once per day, cached in localStorage)
+
+const TRENDS_CACHE_KEY = "shopmate_trends_cache";
+const TRENDS_TTL = 23 * 60 * 60 * 1000; // 23 hours
+
+function getTrendsCache() {
+  try {
+    const raw = localStorage.getItem(TRENDS_CACHE_KEY);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > TRENDS_TTL) return null;
+    return data;
+  } catch { return null; }
+}
+
+function setTrendsCache(data) {
+  try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
+}
+
+const HEAT_CONFIG = {
+  "🔥 Viral now":    { bg: "rgba(239,68,68,0.08)",   border: "rgba(239,68,68,0.25)",   color: "#ef4444" },
+  "📈 Building":     { bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)",   color: "#f59e0b" },
+  "👀 Watch this":   { bg: "rgba(59,130,246,0.08)",   border: "rgba(59,130,246,0.25)",   color: "#3b82f6" },
+};
+
+const STOCK_CONFIG = {
+  "YES":   { bg: "rgba(34,197,94,0.12)",  color: "#22c55e", label: "✓ Stock it" },
+  "MAYBE": { bg: "rgba(245,158,11,0.12)", color: "#f59e0b", label: "? Consider" },
+  "NICHE": { bg: "rgba(100,116,139,0.12)",color: "#94a3b8", label: "◦ Niche" },
+};
+
+function TrendCard({ trend }) {
+  const [open, setOpen] = useState(false);
+  const heat   = HEAT_CONFIG[trend.heat]   || HEAT_CONFIG["👀 Watch this"];
+  const stock  = STOCK_CONFIG[trend.stock] || STOCK_CONFIG["MAYBE"];
+
+  return (
+    <div style={{ marginBottom: 8, borderRadius: 12, border: `1px solid ${heat.border}`, background: heat.bg, overflow: "hidden" }}>
+      {/* Header row */}
+      <div onClick={() => setOpen(o => !o)} style={{ padding: "12px 14px", cursor: "pointer" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div style={{ flex: 1, marginRight: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#ffffff", marginBottom: 3 }}>{trend.product}</div>
+            <div style={{ fontSize: 11, color: "#94a3b8" }}>{trend.category}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: heat.color, whiteSpace: "nowrap" }}>{trend.heat}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: stock.bg, color: stock.color }}>{stock.label}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.5 }}>{trend.why}</div>
+      </div>
+
+      {/* Expanded detail */}
+      {open && (
+        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${heat.border}`, paddingTop: 12, marginTop: 0 }}>
+          {trend.recommendation && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Should you stock it?</div>
+              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.recommendation}</div>
+            </div>
+          )}
+          {trend.source && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Where to source</div>
+              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.source}</div>
+            </div>
+          )}
+          {trend.examples && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Specific products</div>
+              <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{trend.examples}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TrendsSection() {
+  const [trends, setTrends]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [error, setError]     = useState(false);
+
+  const fetchTrends = async (force = false) => {
+    if (!force) {
+      const cached = getTrendsCache();
+      if (cached) { setTrends(cached.trends); setLastUpdated(new Date(cached.ts)); return; }
+    }
+    if (!ANTHROPIC_KEY) { setTrends([]); return; }
+    setLoading(true); setError(false);
+
+    const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    const prompt = `Today is ${today}. You are a retail trend advisor for a UK Londis convenience store in County Durham.
+
+Search the web for what is currently going viral or trending in the UK that a corner shop should know about. Focus on:
+- TikTok viral food and drink products in the UK
+- Viral lifestyle/collectible products relevant to a corner shop (e.g. Labubu, Stanley cups, fidget toys)
+- New product launches trending on social media in the UK
+- "Corner shop haul" type viral content
+- UK food trends from Instagram Reels and YouTube Shorts
+- Anything on UK Twitter/X trending in food, drink or retail
+
+Return 6-8 trends. For each, provide:
+- product: The specific product name (e.g. "Echo Falls Blue Raspberry", "Labubu plush toys", "Prime Hydration")
+- category: Short category tag (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬")
+- why: 1-2 sentences on WHY it's trending and what the social media buzz is about
+- heat: One of exactly: "🔥 Viral now", "📈 Building", "👀 Watch this"
+- stock: One of exactly: "YES", "MAYBE", "NICHE"
+- recommendation: 1-2 sentences on whether a UK corner shop should stock it and why
+- source: Where to get it — be specific e.g. "Booker, Costco" or "Amazon wholesale" or "Specialist importer — not mainstream yet"
+- examples: 2-3 specific product variants or SKUs if known, e.g. "Echo Falls Blue Raspberry 75cl, 187ml"
+
+Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.`;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: AI_HDR,
+        body: JSON.stringify({
+          model: AI_MODEL, max_tokens: 2000,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
+      const clean = text.replace(/```json|```/g, "").trim();
+      const j1 = clean.indexOf("["); const j2 = clean.lastIndexOf("]");
+      if (j1 < 0) throw new Error("No trends found");
+      const parsed = JSON.parse(clean.slice(j1, j2 + 1));
+      const ts = Date.now();
+      setTrendsCache({ trends: parsed, ts });
+      setTrends(parsed);
+      setLastUpdated(new Date(ts));
+    } catch (e) {
+      console.error("Trends fetch:", e);
+      setError(true);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchTrends(false); }, []);
+
+  const cacheAge = lastUpdated ? Math.round((Date.now() - lastUpdated) / 3600000) : null;
+  const ageLabel = cacheAge === 0 ? "Updated just now" : cacheAge === 1 ? "Updated 1 hour ago" : cacheAge != null ? `Updated ${cacheAge}h ago` : "UK social & viral products";
+
+  return (
+    <div style={{ paddingTop: 4 }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
+        </div>
+        <button onClick={() => fetchTrends(true)} disabled={loading} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: "#64748b", fontSize: 11, fontWeight: 600, cursor: loading ? "default" : "pointer", opacity: loading ? 0.5 : 1 }}>
+          {loading ? "..." : "↻ Refresh"}
+        </button>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {Object.entries(HEAT_CONFIG).map(([label, cfg]) => (
+          <div key={label} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>
+            {label}
+          </div>
+        ))}
+      </div>
+
+      {/* Loading skeletons */}
+      {loading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[1,2,3,4].map(i => (
+            <div key={i} style={{ padding: 14, borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
+              <div style={{ height: 14, width: "60%", borderRadius: 4, background: "#1e293b", marginBottom: 8 }} />
+              <div style={{ height: 10, width: "90%", borderRadius: 4, background: "#1e293b", marginBottom: 6 }} />
+              <div style={{ height: 10, width: "70%", borderRadius: 4, background: "#1e293b" }} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && !loading && (
+        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
+          <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 600, marginBottom: 4 }}>Could not load trends</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>Check connection and try again</div>
+          <button onClick={() => fetchTrends(true)} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#3b6fd4", color: "#ffffff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Try Again</button>
+        </div>
+      )}
+
+      {!ANTHROPIC_KEY && !loading && (
+        <div style={{ padding: 20, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b", fontSize: 12, color: "#64748b" }}>
+          API key required to load trends
+        </div>
+      )}
+
+      {/* Trend cards */}
+      {!loading && trends && trends.map((t, i) => <TrendCard key={i} trend={t} />)}
+
+      {!loading && trends && trends.length > 0 && (
+        <div style={{ textAlign: "center", padding: "12px 0", fontSize: 11, color: "#475569" }}>
+          {trends.length} trends · tap any card to expand · refreshes daily
+        </div>
+      )}
+    </div>
+  );
+}
