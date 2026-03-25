@@ -13,7 +13,7 @@ import { AIChatSection, ComingUpSection, NewsSection } from "./AI.jsx";
 import LeafletScanner from "./Promos.jsx";
 
 // ─── SETTINGS SECTION ───────────────────────────────────────────
-function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
+function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay, onViewMonth }) {
   const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [currentPin, setCurrentPin] = useState("");
@@ -40,7 +40,7 @@ function SettingsSection({ clientId, clientName, onRefresh, onLogout }) {
   if (activeSettings === "uploads") return (
     <div>
       <button onClick={() => setActiveSettings("menu")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0", marginBottom: 12, background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 13, fontWeight: 600 }}>← Back to Settings</button>
-      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} />
+      <ManageUploadsSection clientId={clientId} onRefresh={onRefresh} onViewDay={onViewDay} onViewMonth={onViewMonth} />
     </div>
   );
 
@@ -333,7 +333,28 @@ export default function App() {
     if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
   }, [clientId]);
 
+  const handleViewDay = useCallback((date) => {
+    setViewOverrideDay(date);
+    setTimeRange("day");
+    setActiveSection("dashboard");
+    setActiveTab("home");
+  }, []);
+
+  const handleViewMonth = useCallback((monthKey) => {
+    setSelectedMonth(monthKey);
+    setTimeRange("month");
+    setViewOverrideDay(null);
+    setActiveSection("dashboard");
+    setActiveTab("home");
+  }, []);
+
+  const handleTimeRangeChange = useCallback((tr) => {
+    setTimeRange(tr);
+    setViewOverrideDay(null);
+  }, []);
+
   const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+  const [viewOverrideDay, setViewOverrideDay] = useState(null); // pin a specific date from Manage Uploads
 
   // Available months from data
   const availableMonths = useMemo(() => {
@@ -356,13 +377,16 @@ export default function App() {
   // Current range data — day/week/month logic
   const currentDays = useMemo(() => {
     if (!allDays.length) return [];
-    if (timeRange === "day") return [allDays[allDays.length - 1]];
+    if (timeRange === "day") {
+      if (viewOverrideDay) { const found = allDays.find(d => d.dates?.start === viewOverrideDay); return found ? [found] : [allDays[allDays.length - 1]]; }
+      return [allDays[allDays.length - 1]];
+    }
     if (timeRange === "week") return allDays.slice(-7);
     // Month: use selected month or previous complete month
     const mKey = selectedMonth || prevMonthKey;
     const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
     return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
-  }, [allDays, timeRange, selectedMonth, prevMonthKey]);
+  }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
 
   const currentData = useMemo(() => {
     if (!currentDays.length) return null;
@@ -447,7 +471,7 @@ export default function App() {
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
       case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "coming": return <ComingUpSection />;
-      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} />;
+      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
       case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
       default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
@@ -477,7 +501,7 @@ export default function App() {
         {/* Time toggle */}
         <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
           {timeRanges.map(tr => (
-            <button key={tr.id} onClick={() => setTimeRange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
+            <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
               {tr.label}
             </button>
           ))}
