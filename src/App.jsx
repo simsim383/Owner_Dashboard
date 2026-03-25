@@ -113,12 +113,12 @@ const monthlySections = [
 const alwaysSections = [
   { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "coming", label: "Coming Up", icon: "📅" },
-  { id: "trends", label: "Trends", icon: "🔥" },
+  { id: "trends", label: "Social Media", icon: "🔥" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Social & viral products" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Viral & trending products" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
