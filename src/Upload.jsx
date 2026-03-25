@@ -190,15 +190,7 @@ export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMon
       )}
 
       {monthList.map((month, mi) => (
-        <MonthUploadGroup
-          key={mi}
-          month={month}
-          deleting={deleting}
-          onDelete={handleDelete}
-          onDeleteMonth={handleDeleteMonth}
-          onViewDay={onViewDay}
-          onViewMonth={onViewMonth}
-        />
+        <MonthUploadGroup key={mi} month={month} deleting={deleting} onDelete={handleDelete} onDeleteMonth={handleDeleteMonth} onViewDay={onViewDay} onViewMonth={onViewMonth} />
       ))}
     </SectionCard>
   );
@@ -210,33 +202,23 @@ function MonthUploadGroup({ month, deleting, onDelete, onDeleteMonth, onViewDay,
   const isDeletingMonth = deleting === "month-" + month.key;
   return (
     <div style={{ marginBottom: 8 }}>
-      {/* Month header row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: expanded ? "10px 10px 0 0" : 10, background: C.surface, border: `1px solid ${C.border}` }}>
-        {/* Tap left side to expand */}
         <div onClick={() => setExpanded(!expanded)} style={{ flex: 1, cursor: "pointer" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{month.label}</div>
           <div style={{ fontSize: 11, color: C.textMuted }}>{month.uploads.length} days · {fi(month.totalGross)}</div>
         </div>
-        {/* Action buttons */}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {onViewMonth && (
-            <button
-              onClick={() => onViewMonth(month.key)}
-              style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid rgba(59,111,212,0.4)`, background: "rgba(59,111,212,0.12)", color: C.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            <button onClick={() => onViewMonth(month.key)} style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid rgba(59,111,212,0.4)", background: "rgba(59,111,212,0.12)", color: C.accentLight, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
               View
             </button>
           )}
-          <button
-            onClick={() => onDeleteMonth(month.uploads, month.label)}
-            disabled={isDeletingMonth}
-            style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: isDeletingMonth ? 0.5 : 1 }}>
+          <button onClick={() => onDeleteMonth(month.uploads, month.label)} disabled={isDeletingMonth} style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: isDeletingMonth ? 0.5 : 1 }}>
             {isDeletingMonth ? "..." : "Delete"}
           </button>
           <span onClick={() => setExpanded(!expanded)} style={{ fontSize: 14, color: C.textMuted, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.2s", cursor: "pointer", paddingLeft: 2 }}>▾</span>
         </div>
       </div>
-
-      {/* Expanded day rows */}
       {expanded && (
         <div style={{ padding: "8px 10px 10px", background: C.surface, borderRadius: "0 0 10px 10px", border: `1px solid ${C.border}`, borderTop: "none" }}>
           {month.uploads.map((u, i) => (
@@ -253,16 +235,11 @@ function MonthUploadGroup({ month, deleting, onDelete, onDeleteMonth, onViewDay,
               </div>
               <div style={{ display: "flex", gap: 5 }}>
                 {onViewDay && (
-                  <button
-                    onClick={() => onViewDay(u.report_date)}
-                    style={{ padding: "4px 10px", borderRadius: 6, border: `1px solid rgba(59,111,212,0.4)`, background: "rgba(59,111,212,0.12)", color: C.accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  <button onClick={() => onViewDay(u.report_date)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(59,111,212,0.4)", background: "rgba(59,111,212,0.12)", color: C.accentLight, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                     View
                   </button>
                 )}
-                <button
-                  onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) onDelete(u); }}
-                  disabled={deleting === u.id}
-                  style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
+                <button onClick={() => { if (confirm(`Delete ${new Date(u.report_date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} data?`)) onDelete(u); }} disabled={deleting === u.id} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: C.redDim, color: C.redText, fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: deleting === u.id ? 0.5 : 1 }}>
                   {deleting === u.id ? "..." : "Delete"}
                 </button>
               </div>
