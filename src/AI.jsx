@@ -87,137 +87,103 @@ RULES:
 
 // ─── HARDCODED EVENTS DATABASE ───────────────────────────────────
 const EVENTS_2026 = [
-  // APRIL
-  { date: "2026-04-03", event: "Good Friday", icon: "🐣", rawImpact: "Bank holiday — expect high footfall. Stock up on confectionery, soft drinks, alcohol, snacks and BBQ essentials. Easter eggs should be front of store." },
-  { date: "2026-04-05", event: "Easter Sunday", icon: "🐣", rawImpact: "Stock chocolate eggs, hot cross buns, alcohol for family gatherings. Many families visiting — push multipacks and sharing bags." },
-  { date: "2026-04-06", event: "Easter Monday (Bank Holiday)", icon: "🐣", rawImpact: "Last bank holiday of Easter — BBQ weather purchases, snacks, drinks. Keep alcohol and confectionery well stocked." },
-  { date: "2026-04-24", event: "Payday (Last Friday April)", icon: "💰", rawImpact: "Payday uplift — customers will spend more freely. Ensure premium products, alcohol, tobacco and treats are well stocked and faced up." },
-  // MAY
-  { date: "2026-05-04", event: "Early May Bank Holiday", icon: "🏖️", rawImpact: "Long weekend — stock BBQ items, soft drinks, alcohol, crisps and snacks. Footfall will spike on the day." },
-  { date: "2026-05-17", event: "Premier League Final Day", icon: "⚽", rawImpact: "Big viewing occasion — push beer, cider, crisps, pizza snacks and party food. Pre-match and half-time trade will be strong." },
-  { date: "2026-05-23", event: "FA Cup Final", icon: "🏆", rawImpact: "Major national viewing event — stock alcohol, snacks, soft drinks. Similar profile to Champions League final day trade." },
-  { date: "2026-05-25", event: "Spring Bank Holiday", icon: "🌸", rawImpact: "Long weekend — BBQ, drinks, snacks. Pair with half term for a strong spending week. Ensure freezer and drinks chiller are full." },
-  { date: "2026-05-29", event: "Payday (Last Friday May)", icon: "💰", rawImpact: "Payday — premium spend uplift. Alcohol, tobacco, meal deals and treats. Good week to push premium lines." },
-  // JUNE
-  { date: "2026-06-06", event: "Champions League Final", icon: "⚽", rawImpact: "Biggest club game of the year — strong beer, cider, snacks trade. Stock up the evening before. Viewing parties boost multipacks." },
-  { date: "2026-06-11", event: "FIFA World Cup Starts", icon: "🌍", rawImpact: "Month-long tournament — sustained uplift on beer, crisps, soft drinks throughout. Flag displays, face paint. England games will spike trade significantly." },
-  { date: "2026-06-21", event: "Father's Day", icon: "👨", rawImpact: "Stock beer, spirits, snacks and card/gift items. Last-minute buyers peak on the day — keep alcohol visible and accessible." },
-  { date: "2026-06-26", event: "Payday (Last Friday June)", icon: "💰", rawImpact: "Summer payday — customers in good spirits with World Cup on. Alcohol and snacks will be key sellers this week." },
-  // JULY
-  { date: "2026-07-04", event: "Wimbledon Finals Weekend", icon: "🎾", rawImpact: "Stock Pimm's, strawberries and cream items, soft drinks, Prosecco. British sporting occasion with strong impulse buying." },
-  { date: "2026-07-19", event: "Schools Break Up", icon: "🎒", rawImpact: "Summer holidays begin — footfall increases throughout the day. Stock up on ice creams, cold drinks, snacks and sweets for kids." },
-  { date: "2026-07-31", event: "Payday (Last Friday July)", icon: "💰", rawImpact: "First summer holiday payday — high spend period. Alcohol, soft drinks, ice cream, BBQ essentials all prime. World Cup knockouts likely running too." },
-  // AUGUST
-  { date: "2026-08-02", event: "Community Shield", icon: "⚽", rawImpact: "Football returns — stock beer and snacks for the occasion. Signals the start of football season spending." },
-  { date: "2026-08-15", event: "Premier League Season Starts", icon: "⚽", rawImpact: "Weekly football trade resumes — Saturday and Sunday beer, crisps and snacks uplift returns for the season. Key sustained revenue driver." },
-  { date: "2026-08-28", event: "Payday (Last Friday August)", icon: "💰", rawImpact: "Bank holiday weekend payday — double impact. Keep all categories stocked. One of the biggest trading weekends of summer." },
-  { date: "2026-08-31", event: "Summer Bank Holiday", icon: "🌞", rawImpact: "Last bank holiday of summer — BBQ, alcohol, cold drinks. Back to school week after so families making the most of it." },
-  // SEPTEMBER
-  { date: "2026-09-05", event: "Back to School", icon: "🎒", rawImpact: "Stock school snacks, lunch fillers, cereal bars, drinks pouches. Morning footfall increases as routines restart." },
-  { date: "2026-09-25", event: "Payday (Last Friday September)", icon: "💰", rawImpact: "Autumn payday — spending returns to normal pattern. Ensure alcohol and tobacco are stocked for the weekend." },
-  // OCTOBER
-  { date: "2026-10-24", event: "Half Term Starts", icon: "🍂", rawImpact: "Week off school — daytime footfall from families increases. Snacks, sweets, soft drinks and activities push. Stock sweets ahead of Halloween." },
-  { date: "2026-10-30", event: "Payday (Last Friday October)", icon: "💰", rawImpact: "Pre-Halloween payday — customers buying sweets, costumes, decorations. One of the best weeks for confectionery sales." },
-  { date: "2026-10-31", event: "Halloween", icon: "🎃", rawImpact: "Stock pick and mix, bags of sweets, chocolate treats. Heavy footfall from early afternoon. Keep confectionery stocked throughout the day." },
-  // NOVEMBER
-  { date: "2026-11-05", event: "Bonfire Night", icon: "🎆", rawImpact: "Stock sparklers, hot drinks, mulled wine, snacks. Evening trade spike — families gathering before and after firework events." },
-  { date: "2026-11-27", event: "Black Friday & Payday", icon: "🛍️", rawImpact: "Big spending day coincides with payday — stock premium products, alcohol, tobacco and treats. Customers in a buying mood." },
-  // DECEMBER
-  { date: "2026-12-05", event: "Christmas Peak Begins", icon: "🎄", rawImpact: "Christmas trade starts in earnest — stock mince pies, selection boxes, cards, wrapping essentials, alcohol. Daily footfall increases from here." },
-  { date: "2026-12-24", event: "Christmas Eve", icon: "🎅", rawImpact: "Biggest impulse day of the year — last-minute alcohol, snacks, soft drinks, batteries, cards. Be fully stocked by 8am. Expect queues." },
-  { date: "2026-12-25", event: "Christmas Day", icon: "🎁", rawImpact: "If open — last-minute emergency items only. Milk, bread, alcohol forgotten at home. Premium charge opportunity on essentials." },
-  { date: "2026-12-26", event: "Boxing Day (Football)", icon: "⚽", rawImpact: "Full Premier League programme — stock beer, snacks, soft drinks. Strong afternoon and evening trade around kick-offs." },
-  { date: "2026-12-31", event: "New Year's Eve", icon: "🥂", rawImpact: "Stock Prosecco, Champagne, beer, cider, soft drinks, snacks and party food. Trade builds from mid-afternoon. One of the top 5 alcohol days of the year." },
+  { date: "2026-04-03", event: "Good Friday", icon: "🐣", rawImpact: "Stock Easter eggs, hot cross buns, alcohol and BBQ essentials. High footfall all day — keep confectionery front of store." },
+  { date: "2026-04-05", event: "Easter Sunday", icon: "🐣", rawImpact: "Family gathering day — chocolate, alcohol, sharing snacks. Push multipacks and premium items." },
+  { date: "2026-04-06", event: "Easter Monday (Bank Holiday)", icon: "🐣", rawImpact: "Last bank holiday of Easter — BBQ weather purchases, snacks, cold drinks. Keep alcohol and confectionery well stocked." },
+  { date: "2026-04-24", event: "Payday (April)", icon: "💰", rawImpact: "Customers spend more freely on payday. Ensure premium products, alcohol, tobacco and treats are well faced up." },
+  { date: "2026-05-04", event: "Early May Bank Holiday", icon: "🏖️", rawImpact: "Long weekend — BBQ items, soft drinks, alcohol, crisps. Footfall spikes on the day." },
+  { date: "2026-05-17", event: "Premier League Final Day", icon: "⚽", rawImpact: "Big viewing occasion — beer, cider, crisps, pizza snacks. Pre-match and half-time trade strong." },
+  { date: "2026-05-23", event: "FA Cup Final", icon: "🏆", rawImpact: "Major national viewing event — stock alcohol, snacks, soft drinks for watching parties." },
+  { date: "2026-05-25", event: "Spring Bank Holiday", icon: "🌸", rawImpact: "Long weekend with half term — BBQ, drinks, snacks. Ensure freezer and drinks chiller are full." },
+  { date: "2026-05-29", event: "Payday (May)", icon: "💰", rawImpact: "Payday uplift — alcohol, tobacco, meal deals and treats. Good week to push premium lines." },
+  { date: "2026-06-06", event: "Champions League Final", icon: "⚽", rawImpact: "Biggest club game of the year — beer, cider, snacks. Stock up the evening before. Multipacks move well." },
+  { date: "2026-06-11", event: "FIFA World Cup Starts", icon: "🌍", rawImpact: "Month-long tournament — sustained uplift on beer, crisps, soft drinks throughout. England games spike trade significantly." },
+  { date: "2026-06-21", event: "Father's Day", icon: "👨", rawImpact: "Stock beer, spirits, snacks. Last-minute buyers peak on the day — keep alcohol visible." },
+  { date: "2026-06-26", event: "Payday (June)", icon: "💰", rawImpact: "Summer payday with World Cup on — alcohol and snacks will be key sellers this week." },
+  { date: "2026-07-04", event: "Wimbledon Finals Weekend", icon: "🎾", rawImpact: "Stock Pimm's, Prosecco, soft drinks. British sporting occasion with strong impulse buying." },
+  { date: "2026-07-19", event: "Schools Break Up", icon: "🎒", rawImpact: "Summer holidays begin — footfall increases through the day. Ice creams, cold drinks, snacks and sweets for kids." },
+  { date: "2026-07-31", event: "Payday (July)", icon: "💰", rawImpact: "First summer holiday payday — alcohol, soft drinks, ice cream, BBQ essentials. World Cup knockouts likely running too." },
+  { date: "2026-08-02", event: "Community Shield", icon: "⚽", rawImpact: "Football returns — beer and snacks. Signals start of football season spending." },
+  { date: "2026-08-15", event: "Premier League Season Starts", icon: "⚽", rawImpact: "Weekly football trade resumes — Saturday beer, crisps and snacks uplift returns for the season." },
+  { date: "2026-08-28", event: "Payday (August)", icon: "💰", rawImpact: "Bank holiday weekend payday — double impact. All categories should be fully stocked." },
+  { date: "2026-08-31", event: "Summer Bank Holiday", icon: "🌞", rawImpact: "Last bank holiday of summer — BBQ, alcohol, cold drinks. Back to school week follows." },
+  { date: "2026-09-05", event: "Back to School", icon: "🎒", rawImpact: "Stock school snacks, lunch fillers, cereal bars, drinks pouches. Morning footfall increases." },
+  { date: "2026-09-25", event: "Payday (September)", icon: "💰", rawImpact: "Autumn payday — spending returns to normal pattern. Alcohol and tobacco stocked for the weekend." },
+  { date: "2026-10-24", event: "Half Term Starts", icon: "🍂", rawImpact: "Week off school — daytime footfall from families. Snacks, sweets, soft drinks up. Start stocking Halloween sweets." },
+  { date: "2026-10-30", event: "Payday (October)", icon: "💰", rawImpact: "Pre-Halloween payday — customers buying sweets, costumes. Best week for confectionery sales." },
+  { date: "2026-10-31", event: "Halloween", icon: "🎃", rawImpact: "Heavy footfall from early afternoon. Keep pick and mix, bags of sweets, chocolate fully stocked throughout." },
+  { date: "2026-11-05", event: "Bonfire Night", icon: "🎆", rawImpact: "Evening trade spike — hot drinks, mulled wine, snacks. Families gathering before and after fireworks." },
+  { date: "2026-11-27", event: "Black Friday & Payday", icon: "🛍️", rawImpact: "Big spending day plus payday — stock premium products, alcohol, tobacco and treats." },
+  { date: "2026-12-05", event: "Christmas Peak Begins", icon: "🎄", rawImpact: "Christmas trade starts in earnest — mince pies, selection boxes, cards, alcohol. Daily footfall increases from here." },
+  { date: "2026-12-24", event: "Christmas Eve", icon: "🎅", rawImpact: "Biggest impulse day of the year — last-minute alcohol, snacks, soft drinks, batteries. Be fully stocked by 8am." },
+  { date: "2026-12-26", event: "Boxing Day (Football)", icon: "⚽", rawImpact: "Full Premier League programme — beer, snacks, soft drinks. Strong afternoon and evening trade." },
+  { date: "2026-12-31", event: "New Year's Eve", icon: "🥂", rawImpact: "Stock Prosecco, Champagne, beer, cider, snacks. Trade builds from mid-afternoon. Top 5 alcohol day of the year." },
 ];
 
 function calcDays(dateStr) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const event = new Date(dateStr + "T00:00:00");
-  return Math.round((event - today) / 86400000);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((new Date(dateStr + "T00:00:00") - today) / 86400000);
 }
-
-function getPriority(daysAway) {
-  if (daysAway < 0) return null; // past
-  if (daysAway <= 3) return "URGENT";
-  if (daysAway <= 14) return "PLAN";
+function getPriority(n) {
+  if (n < 0) return null;
+  if (n <= 3) return "URGENT";
+  if (n <= 14) return "PLAN";
   return "AWARE";
 }
-
-function getUpcomingEvents() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+function getUpcoming() {
   return EVENTS_2026
     .map(e => ({ ...e, daysAway: calcDays(e.date) }))
     .filter(e => e.daysAway >= 0 && e.daysAway <= 60)
     .sort((a, b) => a.daysAway - b.daysAway)
     .slice(0, 8);
 }
-
-function formatDaysAway(n) {
-  if (n === 0) return "TODAY";
-  if (n === 1) return "Tomorrow";
-  return `${n} days`;
-}
-
-function formatEventDate(dateStr) {
-  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
-}
+function fmtDays(n) { return n === 0 ? "TODAY" : n === 1 ? "Tomorrow" : `${n} days`; }
+function fmtDate(s) { return new Date(s + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); }
 
 // ─── COMING UP ──────────────────────────────────────────────────
 export function ComingUpSection() {
-  const [tick, setTick] = useState(0); // forces recalculation of days on refresh
-  const [impacts, setImpacts] = useState({}); // AI-generated impacts keyed by date
+  const [tick, setTick] = useState(0);
+  const [impacts, setImpacts] = useState({});
   const [loadingImpacts, setLoadingImpacts] = useState(false);
 
-  const events = useMemo(() => getUpcomingEvents(), [tick]);
+  const events = useMemo(() => getUpcoming(), [tick]);
 
-  // Generate AI stock advice for the upcoming events
   const generateImpacts = useCallback(async () => {
     if (!ANTHROPIC_KEY || events.length === 0) return;
     setLoadingImpacts(true);
     try {
-      const eventList = events.map(e => `- ${e.event} (${formatEventDate(e.date)}, ${formatDaysAway(e.daysAway)}): ${e.rawImpact}`).join("\n");
-      const prompt = `You are a stock advisor for a UK Londis convenience store in County Durham (working class area, loyal regular customers).
+      const list = events.map(e => `- ${e.event} (${fmtDate(e.date)}, ${fmtDays(e.daysAway)}): ${e.rawImpact}`).join("\n");
+      const prompt = `You are a stock advisor for a UK Londis convenience store in County Durham (working class area, loyal regulars).
 
-For each of these upcoming events, write ONE short punchy sentence (max 12 words) of specific stock advice. Focus on the 2-3 most important products to have ready.
+For each upcoming event, write ONE punchy sentence (max 12 words) of the most important specific stock advice.
 
 Events:
-${eventList}
+${list}
 
-Respond ONLY with a JSON object where keys are event names and values are the stock advice string. No markdown, no backticks.`;
+Respond ONLY with a JSON object: {"event name": "stock advice", ...}. No markdown, no backticks.`;
 
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
       });
       if (!res.ok) { setLoadingImpacts(false); return; }
       const data = await res.json();
       const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
       const clean = text.replace(/```json|```/g, "").trim();
-      try {
-        const parsed = JSON.parse(clean);
-        setImpacts(parsed);
-      } catch { /* use rawImpact fallback */ }
+      try { setImpacts(JSON.parse(clean)); } catch { /* use rawImpact fallback */ }
     } catch (e) { console.error("Coming Up impacts:", e); }
     setLoadingImpacts(false);
   }, [events]);
 
   useEffect(() => { generateImpacts(); }, [tick]);
 
-  const handleRefresh = () => setTick(t => t + 1);
-
   return (
     <SectionCard title="Coming Up" icon="📅">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontSize: 12, color: C.textMuted }}>Next 8 events · tap refresh to update days</div>
-        <button onClick={handleRefresh} style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-          ↻ Refresh
-        </button>
+        <div style={{ fontSize: 12, color: C.textMuted }}>Next events · refresh to update days</div>
+        <button onClick={() => setTick(t => t + 1)} style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>↻ Refresh</button>
       </div>
-
       {events.length === 0 && <EmptyState msg="No upcoming events in the next 60 days" />}
-
       {events.map((e, i) => {
         const priority = getPriority(e.daysAway);
         const impact = impacts[e.event] || e.rawImpact;
@@ -229,7 +195,7 @@ Respond ONLY with a JSON object where keys are event names and values are the st
                 <span style={{ fontSize: 13, color: C.white, fontWeight: 700 }}>{e.event}</span>
               </div>
               <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>
-                {formatEventDate(e.date)} · <span style={{ color: priority === "URGENT" ? C.redText : priority === "PLAN" ? C.orangeText : C.textMuted, fontWeight: 600 }}>{formatDaysAway(e.daysAway)}</span>
+                {fmtDate(e.date)} · <span style={{ color: priority === "URGENT" ? C.redText : priority === "PLAN" ? C.orangeText : C.textMuted, fontWeight: 600 }}>{fmtDays(e.daysAway)}</span>
               </div>
               <div style={{ fontSize: 11, color: C.textSecondary, lineHeight: 1.5 }}>
                 {loadingImpacts && !impacts[e.event] ? "Loading advice..." : impact}
@@ -244,36 +210,36 @@ Respond ONLY with a JSON object where keys are event names and values are the st
 }
 
 // ─── NEWS ───────────────────────────────────────────────────────
-// Uses free RSS-to-JSON proxies for real UK retail news — no API key needed
+// RSS feeds via rss2json.com — free tier, no API key needed
+// Sources chosen for rss2json compatibility and UK retail relevance
 
 const RSS_FEEDS = [
-  {
-    name: "The Grocer",
-    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.thegrocer.co.uk%2Frss",
-    color: "#2563eb",
-  },
   {
     name: "Better Retailing",
     url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fbetterretailing.com%2Ffeed",
     color: "#16a34a",
   },
   {
-    name: "Convenience Store",
-    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.conveniencestore.co.uk%2Frss",
+    name: "Retail Gazette",
+    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.retailgazette.co.uk%2Ffeed",
+    color: "#2563eb",
+  },
+  {
+    name: "Talking Retail",
+    url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.talkingretail.com%2Ffeed",
     color: "#9333ea",
   },
 ];
 
 function timeAgo(dateStr) {
   if (!dateStr) return "";
-  const then = new Date(dateStr);
-  const mins = Math.round((Date.now() - then) / 60000);
+  const mins = Math.round((Date.now() - new Date(dateStr)) / 60000);
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
   if (days < 7) return `${days}d ago`;
-  return then.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 function stripHtml(str) {
@@ -285,32 +251,40 @@ export function NewsSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [feedStatus, setFeedStatus] = useState({});
 
   const fetchNews = useCallback(async () => {
     setLoading(true); setError(false);
+    const status = {};
     try {
       const results = await Promise.allSettled(
         RSS_FEEDS.map(feed =>
           fetch(feed.url)
-            .then(r => r.json())
-            .then(data => (data.items || []).slice(0, 4).map(item => ({
-              title: stripHtml(item.title),
-              summary: stripHtml(item.description || item.content || "").slice(0, 120) + "…",
-              url: item.link,
-              source: feed.name,
-              sourceColor: feed.color,
-              pubDate: item.pubDate,
-              timeAgo: timeAgo(item.pubDate),
-            })))
+            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then(data => {
+              if (data.status !== "ok") throw new Error(data.message || "Feed error");
+              status[feed.name] = { ok: true, count: data.items?.length || 0 };
+              return (data.items || []).slice(0, 5).map(item => ({
+                title: stripHtml(item.title),
+                summary: stripHtml(item.description || item.content || "").slice(0, 140) + "…",
+                url: item.link,
+                source: feed.name,
+                sourceColor: feed.color,
+                pubDate: item.pubDate,
+                timeAgo: timeAgo(item.pubDate),
+              }));
+            })
+            .catch(e => { status[feed.name] = { ok: false, error: e.message }; return []; })
         )
       );
 
       const all = results
-        .filter(r => r.status === "fulfilled")
-        .flatMap(r => r.value)
+        .flatMap(r => r.status === "fulfilled" ? r.value : [])
+        .filter(a => a.title)
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-        .slice(0, 10);
+        .slice(0, 12);
 
+      setFeedStatus(status);
       if (all.length === 0) { setError(true); } else { setArticles(all); }
       setLastUpdated(new Date());
     } catch (e) {
@@ -321,6 +295,8 @@ export function NewsSection() {
   }, []);
 
   useEffect(() => { fetchNews(); }, []);
+
+  const workingFeeds = RSS_FEEDS.filter(f => feedStatus[f.name]?.ok !== false);
 
   return (
     <div style={{ paddingTop: 4 }}>
@@ -337,40 +313,49 @@ export function NewsSection() {
         </button>
       </div>
 
-      {/* Source badges */}
+      {/* Source badges — show green/grey based on feed health */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-        {RSS_FEEDS.map(f => (
-          <div key={f.name} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: f.color + "20", color: f.color, border: `1px solid ${f.color}40` }}>
-            {f.name}
-          </div>
-        ))}
+        {RSS_FEEDS.map(f => {
+          const ok = feedStatus[f.name]?.ok !== false;
+          return (
+            <div key={f.name} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700, background: ok ? f.color + "20" : "rgba(100,116,139,0.1)", color: ok ? f.color : C.textMuted, border: `1px solid ${ok ? f.color + "40" : C.border}` }}>
+              {ok ? "" : "✕ "}{f.name}
+            </div>
+          );
+        })}
       </div>
 
+      {/* Skeleton loading */}
       {loading && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {[1, 2, 3].map(i => (
+          {[1, 2, 3, 4].map(i => (
             <div key={i} style={{ padding: "16px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
-              <div style={{ height: 10, width: "40%", borderRadius: 5, background: C.surface, marginBottom: 10 }} />
-              <div style={{ height: 14, width: "90%", borderRadius: 5, background: C.surface, marginBottom: 8 }} />
-              <div style={{ height: 10, width: "70%", borderRadius: 5, background: C.surface }} />
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <div style={{ height: 8, width: 80, borderRadius: 4, background: C.surface }} />
+                <div style={{ height: 8, width: 40, borderRadius: 4, background: C.surface, marginLeft: "auto" }} />
+              </div>
+              <div style={{ height: 14, width: "95%", borderRadius: 4, background: C.surface, marginBottom: 6 }} />
+              <div style={{ height: 14, width: "70%", borderRadius: 4, background: C.surface, marginBottom: 8 }} />
+              <div style={{ height: 10, width: "85%", borderRadius: 4, background: C.surface }} />
             </div>
           ))}
         </div>
       )}
 
+      {/* Error state */}
       {error && !loading && (
-        <div style={{ padding: 20, textAlign: "center", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 24, marginBottom: 8 }}>📡</div>
+        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
           <div style={{ fontSize: 13, color: C.white, fontWeight: 600, marginBottom: 4 }}>Could not load news</div>
-          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>Check your connection and try again</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>Check your connection and try again</div>
           <button onClick={fetchNews} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Try Again</button>
         </div>
       )}
 
+      {/* Articles */}
       {!loading && !error && articles.map((item, i) => (
         <a key={i} href={item.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none", display: "block", marginBottom: 8 }}>
-          <div style={{ padding: "14px 16px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}`, transition: "border-color 0.15s" }}>
-            {/* Source + time row */}
+          <div style={{ padding: "14px 16px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: item.sourceColor, flexShrink: 0 }} />
@@ -378,21 +363,18 @@ export function NewsSection() {
               </div>
               <span style={{ fontSize: 10, color: C.textMuted }}>{item.timeAgo}</span>
             </div>
-            {/* Headline */}
             <div style={{ fontSize: 14, fontWeight: 700, color: C.white, lineHeight: 1.4, marginBottom: 6 }}>{item.title}</div>
-            {/* Summary */}
-            {item.summary && item.summary !== "…" && (
-              <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.5 }}>{item.summary}</div>
+            {item.summary && item.summary.length > 3 && (
+              <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.5, marginBottom: 8 }}>{item.summary}</div>
             )}
-            {/* Read more */}
-            <div style={{ fontSize: 11, color: item.sourceColor, fontWeight: 600, marginTop: 8 }}>Read more →</div>
+            <div style={{ fontSize: 11, color: item.sourceColor, fontWeight: 600 }}>Read more →</div>
           </div>
         </a>
       ))}
 
       {!loading && !error && articles.length > 0 && (
         <div style={{ textAlign: "center", padding: "12px 0", fontSize: 11, color: C.textMuted }}>
-          {articles.length} stories from {RSS_FEEDS.length} sources
+          {articles.length} stories · {workingFeeds.length}/{RSS_FEEDS.length} sources live
         </div>
       )}
     </div>
