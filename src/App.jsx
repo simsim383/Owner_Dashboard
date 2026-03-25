@@ -101,8 +101,8 @@ const baseSections = [
   { id: "review", label: "Review", icon: "⚠️" },
   { id: "topsellers", label: "Top Sellers", icon: "💰" },
   { id: "erosion", label: "Erosion", icon: "🚨" },
-  { id: "missing", label: "Hidden Profit", icon: "🔍" },
-  { id: "ops", label: "Operations", icon: "⚙️" },
+  { id: "missing", label: "Hidden Profit", icon: "💷" },
+  { id: "ops", label: "Operations", icon: "👥" },
   { id: "actions", label: "Actions", icon: "✅" },
 ];
 const monthlySections = [
