@@ -141,7 +141,7 @@ export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMon
 
   const handleDelete = async (upload) => {
     setDeleting(upload.id);
-    const result = await deleteUpload(upload.id);
+    const result = await deleteUpload(upload.id, clientId);
     if (result.ok) { setUploads(prev => prev.filter(u => u.id !== upload.id)); if (onRefresh) onRefresh(); }
     setDeleting(null);
   };
@@ -149,7 +149,7 @@ export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMon
   const handleDeleteAll = async () => {
     if (!confirm(`Delete ALL ${uploads.length} uploads? This cannot be undone.`)) return;
     setDeleting("all");
-    for (const u of uploads) { await deleteUpload(u.id); }
+    for (const u of uploads) { await deleteUpload(u.id, clientId); }
     setUploads([]); if (onRefresh) onRefresh(); setDeleting(null);
   };
 
@@ -157,7 +157,7 @@ export function ManageUploadsSection({ clientId, onRefresh, onViewDay, onViewMon
     if (!confirm(`Delete all ${monthUploads.length} days in ${monthLabel}? This cannot be undone.`)) return;
     const monthKey = "month-" + monthUploads[0].report_date.slice(0, 7);
     setDeleting(monthKey);
-    for (const u of monthUploads) { await deleteUpload(u.id); }
+    for (const u of monthUploads) { await deleteUpload(u.id, clientId); }
     setUploads(prev => prev.filter(u => !monthUploads.find(m => m.id === u.id)));
     if (onRefresh) onRefresh();
     setDeleting(null);
