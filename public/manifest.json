@@ -1,8 +1,10 @@
 {
-  "name": "ShopMate Sales",
-  "short_name": "ShopMate",
+  "name": "Retail Intelligence",
+  "short_name": "Retail Intelligence",
+  "description": "Business intelligence dashboard for retail owners",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0B1120",
   "theme_color": "#0B1120",
   "icons": [
@@ -15,6 +17,12 @@
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
