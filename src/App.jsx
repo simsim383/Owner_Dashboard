@@ -208,11 +208,32 @@ function AuthScreen({ onAuthenticated }) {
     if (!id) { setLoginMsg("Enter your business ID"); return; }
     if (loginPin.length !== 4) { setLoginMsg("Enter your 4-digit PIN"); return; }
     setLoggingIn(true); setLoginMsg(null);
+
+    // ── Offline path: use saved credentials from localStorage ──
+    if (!navigator.onLine) {
+      const savedId = getSavedOwnerId();
+      const savedPin = localStorage.getItem(`shopmate_pin_${savedId}`);
+      if (savedId && id === savedId && savedPin && loginPin === savedPin) {
+        saveOwnerId(id);
+        onAuthenticated(savedId, id);
+      } else if (!savedId || id !== savedId) {
+        setLoginMsg("You're offline — can only log in as your saved account");
+      } else {
+        setLoginMsg("Incorrect PIN");
+        setLoginPin("");
+      }
+      setLoggingIn(false);
+      return;
+    }
+
+    // ── Online path: verify against Supabase as normal ──
     try {
       const client = await getOrCreateClient(id);
       if (!client) { setLoginMsg("Business not found"); setLoggingIn(false); return; }
       const valid = await verifyPin(client.id, loginPin);
       if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
+      // Save PIN locally so offline login works next time
+      localStorage.setItem(`shopmate_pin_${id}`, loginPin);
       saveOwnerId(id);
       onAuthenticated(client.id, client.name || id);
     } catch (e) { setLoginMsg("Login failed: " + (e.message || "check connection")); }
@@ -304,6 +325,11 @@ export default function App() {
   // Called by AuthScreen when login/setup succeeds
   const handleAuthenticated = async (cId, cName) => {
     setClientId(cId); setClientName(cName); setAuthenticated(true);
+    if (!navigator.onLine) {
+      setSbStatus("Offline — showing cached data");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const days = await loadFromSupabase(cId);
