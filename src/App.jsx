@@ -345,6 +345,7 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [chatMessages, setChatMessages] = useState([]); // persists across section navigation
 
   useEffect(() => {
     const on  = () => setIsOffline(false);
@@ -562,7 +563,7 @@ export default function App() {
       case "coming":     return <ComingUpSection />;
       case "trends":     return <TrendsSection />;
       case "settings":   return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
-      case "ai":         return <AIChatSection analysis={analysis} allDays={currentDays} />;
+      case "ai":         return <AIChatSection analysis={analysis} allDays={currentDays} messages={chatMessages} setMessages={setChatMessages} />;
       default:           return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
   };
