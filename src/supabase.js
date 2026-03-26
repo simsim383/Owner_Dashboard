@@ -201,34 +201,27 @@ export async function loadFromSupabase(clientId) {
   try {
     const uploads = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.asc&limit=365`, clientId);
     if (!uploads.length) return [];
-    const uploadIds = uploads.map(u => u.id);
-    // Single bulk call instead of one per upload
-    const salesChunks = [];
-    for (let i = 0; i < uploadIds.length; i += 50) {
-      const chunk = uploadIds.slice(i, i + 50);
-      const sales = await sbGet("daily_sales", `upload_id=in.(${chunk.join(",")})&order=gross.desc`, clientId);
-      salesChunks.push(...sales);
+    const allDays = [];
+    for (const u of uploads) {
+      // limit=2000 ensures large product lists (500+ lines) are never silently truncated
+      const sales = await sbGet("daily_sales", `upload_id=eq.${u.id}&order=gross.desc&limit=2000`, clientId);
+      allDays.push({
+        uploadId: u.id,
+        items: sales.map(s => ({
+          barcode: s.barcode, product: s.product, category: s.category,
+          qty: s.qty, gross: Number(s.gross), net: Number(s.net),
+          grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
+          grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
+          hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
+        })),
+        dates: { start: u.report_date, end: u.report_date },
+        isEstimated: u.is_estimated || false,
+        uploadType: u.upload_type || "day",
+        transactions: u.transactions,
+        avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
+      });
     }
-    const salesByUpload = {};
-    for (const s of salesChunks) {
-      if (!salesByUpload[s.upload_id]) salesByUpload[s.upload_id] = [];
-      salesByUpload[s.upload_id].push(s);
-    }
-    return uploads.map(u => ({
-      uploadId: u.id,
-      items: (salesByUpload[u.id] || []).map(s => ({
-        barcode: s.barcode, product: s.product, category: s.category,
-        qty: s.qty, gross: Number(s.gross), net: Number(s.net),
-        grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
-        grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
-        hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
-      })),
-      dates: { start: u.report_date, end: u.report_date },
-      isEstimated: u.is_estimated || false,
-      uploadType: u.upload_type || "day",
-      transactions: u.transactions,
-      avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
-    }));
+    return allDays;
   } catch (e) { console.error("Load from Supabase:", e); return []; }
 }
 
