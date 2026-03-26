@@ -12,6 +12,28 @@ import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection, TrendsSection } from "./AI.jsx";
 import LeafletScanner from "./Promos.jsx";
 
+// ─── OFFLINE BANNER ─────────────────────────────────────────────
+function OfflineBanner() {
+  const [offline, setOffline] = useState(!navigator.onLine);
+  useEffect(() => {
+    const on  = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+  if (!offline) return null;
+  return (
+    <div style={{ position: 'fixed', top: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, zIndex: 999, background: 'rgba(245,158,11,0.95)', backdropFilter: 'blur(8px)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 14 }}>📵</span>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a' }}>You're offline</div>
+        <div style={{ fontSize: 11, color: '#333' }}>Showing cached data — uploads and AI unavailable</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── SETTINGS SECTION ───────────────────────────────────────────
 function SettingsSection({ clientId, clientName, onRefresh, onLogout, onViewDay, onViewMonth }) {
   const [activeSettings, setActiveSettings] = useState("menu"); // menu, uploads, pin
@@ -172,7 +194,6 @@ function AuthScreen({ onAuthenticated }) {
       const client = await getOrCreateClient(id);
       if (client) await setPin(client.id, pin);
       saveOwnerId(id);
-      // Load data and authenticate
       onAuthenticated(client.id, client.name || id);
     } catch (e) {
       const msg = e.message || "";
@@ -208,12 +229,8 @@ function AuthScreen({ onAuthenticated }) {
         {/* ── LANDING ── */}
         {mode === "landing" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button onClick={() => setMode("login")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: "none", background: C.accentLight, color: C.white, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-              Log In
-            </button>
-            <button onClick={() => setMode("setup-code")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, color: C.textSecondary, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
-              Create Account
-            </button>
+            <button onClick={() => setMode("login")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: "none", background: C.accentLight, color: C.white, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>Log In</button>
+            <button onClick={() => setMode("setup-code")} style={{ width: "100%", padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, color: C.textSecondary, fontSize: 15, fontWeight: 600, cursor: "pointer" }}>Create Account</button>
           </div>
         )}
 
@@ -221,19 +238,14 @@ function AuthScreen({ onAuthenticated }) {
         {mode === "login" && (
           <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Welcome back</div>
-
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
             <input style={inp} value={loginId} onChange={e => { setLoginId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setLoginMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
-
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={loginPin} onChange={e => { setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setLoginMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && loginPin.length === 4) handleLogin(); }} placeholder="• • • •" />
-
             {loginMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{loginMsg}</div>}
-
             <button onClick={handleLogin} disabled={loggingIn || !loginId.trim() || loginPin.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: loginId.trim() && loginPin.length === 4 ? C.accentLight : C.surface, color: loginId.trim() && loginPin.length === 4 ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
               {loggingIn ? "Logging in..." : "Log In"}
             </button>
-
             <button onClick={() => { setMode("landing"); setLoginMsg(null); }} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer", padding: 0 }}>← Back</button>
           </div>
         )}
@@ -257,22 +269,17 @@ function AuthScreen({ onAuthenticated }) {
           <div style={{ background: C.card, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, textAlign: "left" }}>
             <div style={{ display: "inline-block", background: C.greenDim, color: C.greenText, padding: "4px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginBottom: 12 }}>✓ Code accepted</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.white, marginBottom: 16 }}>Create your account</div>
-
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>BUSINESS ID</div>
             <input style={inp} value={ownerId} onChange={e => { setOwnerId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); setIdMsg(null); }} placeholder="e.g. londis-horden" autoFocus />
-
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 16, marginTop: -8 }}>Lowercase letters, numbers, hyphens only</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>4-DIGIT PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pin} onChange={e => { setLocalPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} placeholder="• • • •" />
-
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>CONFIRM PIN</div>
             <input type="tel" inputMode="numeric" maxLength={4} style={pinInp} value={pinConfirm} onChange={e => { setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4)); setIdMsg(null); }} onKeyDown={e => { if (e.key === "Enter" && pin.length === 4 && pinConfirm.length === 4) handleCreate(); }} placeholder="• • • •" />
-
             {idMsg && <div style={{ fontSize: 13, color: C.redText, marginBottom: 12 }}>{idMsg}</div>}
-
             <button onClick={handleCreate} disabled={saving || !ownerId.trim() || pin.length !== 4 || pinConfirm.length !== 4} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: ownerId.trim() && pin.length === 4 ? C.accentLight : C.surface, color: ownerId.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>
               {saving ? "Creating..." : "Create Account →"}
             </button>
-
             <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>Your business ID and PIN are your login. Remember them — you'll need your PIN each time you open the app.</div>
           </div>
         )}
@@ -344,28 +351,25 @@ export default function App() {
     setTimeRange(tr); setViewOverrideDay(null);
   }, []);
 
-  const [selectedMonth, setSelectedMonth] = useState(null); // null = auto (previous month)
+  const [selectedMonth, setSelectedMonth] = useState(null);
   const [viewOverrideDay, setViewOverrideDay] = useState(null);
 
-  // Available months from data
   const availableMonths = useMemo(() => {
     const months = {};
     allDays.forEach(d => {
       if (!d.dates?.start) return;
-      const m = d.dates.start.slice(0, 7); // "2026-03"
+      const m = d.dates.start.slice(0, 7);
       if (!months[m]) months[m] = { key: m, label: new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }), days: [] };
       months[m].days.push(d);
     });
     return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
   }, [allDays]);
 
-  // Previous complete month key
   const prevMonthKey = useMemo(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }, []);
 
-  // Current range data — day/week/month logic
   const currentDays = useMemo(() => {
     if (!allDays.length) return [];
     if (timeRange === "day") {
@@ -373,10 +377,9 @@ export default function App() {
       return [allDays[allDays.length - 1]];
     }
     if (timeRange === "week") return allDays.slice(-7);
-    // Month: use selected month or previous complete month
     const mKey = selectedMonth || prevMonthKey;
     const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
-    return monthDays.length > 0 ? monthDays : allDays; // fallback to all if no match
+    return monthDays.length > 0 ? monthDays : allDays;
   }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
 
   const currentData = useMemo(() => {
@@ -385,15 +388,10 @@ export default function App() {
     return { items: currentDays.flatMap(d => d.items), dates: { start: currentDays[0].dates?.start, end: currentDays[currentDays.length - 1].dates?.end } };
   }, [currentDays, timeRange]);
 
-  // Previous period for WoW comparison
   const prevWeekDays = useMemo(() => {
     if (!allDays.length) return null;
-    if (timeRange === "day") {
-      // Day mode: return previous day as a single-element array
-      return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
-    }
+    if (timeRange === "day") return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
     if (timeRange === "month") {
-      // Month mode: find the PREVIOUS calendar month's data
       const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
       if (!currentMonthKey) return null;
       const d = new Date(currentMonthKey + "-15");
@@ -402,7 +400,6 @@ export default function App() {
       const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
       return prevDays.length > 0 ? prevDays : null;
     }
-    // Week mode: get the same number of days before
     return getPrevWeekData(allDays, currentDays);
   }, [allDays, currentDays, timeRange]);
 
@@ -416,10 +413,8 @@ export default function App() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
-  // Not authenticated — show login/setup screen
   if (!authenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
 
-  // Loading data after auth
   if (loading) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center" }}>
@@ -431,9 +426,9 @@ export default function App() {
     </div>
   );
 
-  // No data — upload screen
   if (!analysis) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary }}>
+      <OfflineBanner />
       <UploadScreen onDataLoaded={addDay} uploads={allDays} />
       <style>{globalCSS}</style>
     </div>
@@ -448,29 +443,32 @@ export default function App() {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "dashboard": return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
-      case "cats": return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
-      case "trending": return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "review": return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "dashboard":  return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      case "cats":       return <CategoriesSection analysis={analysis} timeRange={rangeLabel} onSelectProduct={handleSelectProduct} />;
+      case "trending":   return <TrendingSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "review":     return <ReviewSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
       case "topsellers": return <TopSellersSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "erosion": return <ErosionSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "missing": return <HiddenProfitSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
-      case "ops": return <OpsSection analysis={analysis} allDays={currentDays} />;
-      case "actions": return <ActionsSection analysis={analysis} />;
-      case "density": return <ShelfDensitySection analysis={analysis} />;
+      case "erosion":    return <ErosionSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "missing":    return <HiddenProfitSection analysis={analysis} onSelectProduct={handleSelectProduct} />;
+      case "ops":        return <OpsSection analysis={analysis} allDays={currentDays} />;
+      case "actions":    return <ActionsSection analysis={analysis} />;
+      case "density":    return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
-      case "leaflet": return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
-      case "coming": return <ComingUpSection />;
-      case "trends": return <TrendsSection />;
-      case "settings": return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
-      case "ai": return <AIChatSection analysis={analysis} allDays={currentDays} />;
-      default: return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
+      case "leaflet":    return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
+      case "coming":     return <ComingUpSection />;
+      case "trends":     return <TrendsSection />;
+      case "settings":   return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
+      case "ai":         return <AIChatSection analysis={analysis} allDays={currentDays} />;
+      default:           return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
   };
 
   return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, position: "relative", overflow: "hidden" }}>
+
+      <OfflineBanner />
+
       <div style={{ position: "fixed", top: -150, right: -100, width: 400, height: 400, background: "radial-gradient(circle, rgba(46,80,144,0.15) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
 
       {/* Header */}
@@ -499,7 +497,7 @@ export default function App() {
           ))}
         </div>
 
-        {/* Month selector — only when in month mode */}
+        {/* Month selector */}
         {isMonth && availableMonths.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
@@ -551,28 +549,26 @@ export default function App() {
         {activeTab === "upload" && <UploadScreen onDataLoaded={addDay} uploads={allDays} onCancel={() => { setActiveTab("home"); setActiveSection("dashboard"); }} />}
       </div>
 
+      {/* Selected product overlay */}
+      {selectedProduct && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "flex-end", maxWidth: 480, margin: "0 auto" }} onClick={() => setSelectedProduct(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxHeight: "80vh", overflowY: "auto", borderRadius: "20px 20px 0 0", background: C.bg, padding: 20 }}>
+            <ProductDetail product={selectedProduct} onClose={() => setSelectedProduct(null)} />
+          </div>
+        </div>
+      )}
+
       {/* Bottom nav */}
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, zIndex: 10, background: `linear-gradient(180deg, transparent, ${C.bg} 20%)`, padding: "20px 16px 12px" }}>
         <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "12px 0", borderRadius: 20, background: C.card, border: `1px solid ${C.border}`, boxShadow: "0 -4px 24px rgba(0,0,0,0.4)" }}>
           {bottomNav.map(n => (
             <button key={n.id} onClick={() => { setActiveTab(n.id); if (n.id === "home") setActiveSection("dashboard"); }} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, opacity: activeTab === n.id ? 1 : 0.5, transition: "opacity 0.2s" }}>
               <span style={{ fontSize: n.id === "grid" ? 24 : 22 }}>{n.icon}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, color: activeTab === n.id ? C.accentLight : C.textMuted }}>{n.label}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, color: activeTab === n.id ? C.white : C.textMuted }}>{n.label}</span>
             </button>
           ))}
         </div>
       </div>
-
-      {/* Product Detail Overlay */}
-      {selectedProduct && (
-        <ProductDetail
-          product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
-          allDays={allDays}
-          currentDays={currentDays}
-          timeRange={rangeLabel}
-        />
-      )}
 
       <style>{globalCSS}</style>
     </div>
