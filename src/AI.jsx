@@ -53,6 +53,7 @@ RULES:
         body: JSON.stringify({ model: AI_MODEL, max_tokens: 400, system: systemPrompt, messages: newMessages }),
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error.message || data.error.type);
       const reply = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "Sorry, I couldn't get a response.";
       setMessages([...newMessages, { role: "assistant", content: reply }]);
     } catch (e) { setMessages([...newMessages, { role: "assistant", content: "Error: " + e.message }]); }
