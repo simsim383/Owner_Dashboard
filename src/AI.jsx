@@ -556,18 +556,25 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
         body: JSON.stringify({
-          model: AI_MODEL, max_tokens: 2000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
           messages: [{ role: "user", content: prompt }],
         }),
       });
-      if (!res.ok) throw new Error(`API ${res.status}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `API ${res.status}`);
+      }
       const data = await res.json();
-      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
+      if (data.error) throw new Error(data.error.message || data.error.type);
+      // Extract text from all content blocks (web search returns mixed blocks)
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("") || "";
       const clean = text.replace(/```json|```/g, "").trim();
       const j1 = clean.indexOf("["); const j2 = clean.lastIndexOf("]");
-      if (j1 < 0) throw new Error("No trends found");
+      if (j1 < 0) throw new Error("No trends found in response");
       const parsed = JSON.parse(clean.slice(j1, j2 + 1));
+      if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Empty trends array");
       const ts = Date.now();
       setTrendsCache(parsed);
       setTrends(parsed);
@@ -575,8 +582,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       const newCount = incrementRefreshCount();
       setRefreshCount(newCount);
     } catch (e) {
-      console.error("Trends fetch:", e);
-      setError(true);
+      console.error("Trends fetch error:", e.message);
+      setError(e.message || "Unknown error");
     }
     setLoading(false);
   };
@@ -624,8 +631,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
         <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
           <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
           <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 600, marginBottom: 4 }}>Could not load trends</div>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>Check connection and try again</div>
-          <button onClick={() => fetchTrends(true)} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#3b6fd4", color: "#ffffff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Try Again</button>
+          <div style={{ fontSize: 11, color: "#ef4444", marginBottom: 12, wordBreak: "break-word", padding: "0 8px" }}>{typeof error === "string" ? error : "Check connection and try again"}</div>
+          <button onClick={fetchTrends} disabled={!canRefresh} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#3b6fd4", color: "#ffffff", fontSize: 12, fontWeight: 700, cursor: canRefresh ? "pointer" : "default", opacity: canRefresh ? 1 : 0.5 }}>Try Again</button>
         </div>
       )}
 
