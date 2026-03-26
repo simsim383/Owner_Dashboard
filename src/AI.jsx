@@ -6,8 +6,7 @@ import { C, Badge, SectionCard, EmptyState, Insight, f, fi, pct } from "./compon
 import { ANTHROPIC_KEY, AI_MODEL, AI_HDR } from "./config.js";
 
 // ─── AI CHAT ────────────────────────────────────────────────────
-export function AIChatSection({ analysis, allDays }) {
-  const [messages, setMessages] = useState([]);
+export function AIChatSection({ analysis, allDays, messages, setMessages }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const chatRef = useRef();
@@ -22,7 +21,20 @@ export function AIChatSection({ analysis, allDays }) {
       return `${day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?"} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units, £${p.toFixed(0)} profit${d.transactions ? `, ${d.transactions} trans, £${(g / d.transactions).toFixed(2)} basket` : ""}`;
     }).join("\n");
     const catS = categories.slice(0, 15).map(c => `${c.name}: £${c.gross.toFixed(0)} (${c.pctRev.toFixed(0)}%), ${c.margin.toFixed(1)}% margin, ${c.qty} units`).join("\n");
-    const top = [...analysis.items].sort((a, b) => b.gross - a.gross).slice(0, 30).map(i => `${i.product}(${i.category}):qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
+
+    // All products grouped by category, sorted slow→fast within each (so slow movers are visible)
+    const productsByCategory = {};
+    [...analysis.items].forEach(i => {
+      if (!productsByCategory[i.category]) productsByCategory[i.category] = [];
+      productsByCategory[i.category].push(i);
+    });
+    const allProducts = Object.entries(productsByCategory)
+      .sort(([, a], [, b]) => b.reduce((s, i) => s + i.gross, 0) - a.reduce((s, i) => s + i.gross, 0))
+      .map(([cat, items]) => {
+        const sorted = [...items].sort((a, b) => a.qty - b.qty); // slow movers first
+        return `[${cat}]\n` + sorted.map(i => `  ${i.product}:qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
+      }).join("\n");
+
     return `You are an expert retail advisor for a UK convenience store. ${allDays.length} days of data.
 
 SUMMARY: £${summary.totalGross.toFixed(0)} rev, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
@@ -31,7 +43,8 @@ DAILY:\n${dailyBreakdown}
 
 CATEGORIES:\n${catS}
 
-TOP 30:\n${top}
+ALL PRODUCTS BY CATEGORY (slow movers listed first within each category):
+${allProducts}
 
 RULES:
 • Use bullet points, bold key numbers
