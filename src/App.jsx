@@ -331,7 +331,7 @@ export default function App() {
   const handleAuthenticated = async (cId, cName) => {
     setClientId(cId); setClientName(cName); setAuthenticated(true);
 
-    // ── Offline path: load from localStorage cache ──
+    // ── Offline path: try localStorage cache ──
     if (!navigator.onLine) {
       try {
         const cached = localStorage.getItem(`shopmate_data_${cId}`);
@@ -340,9 +340,16 @@ export default function App() {
           setAllDays(days);
           setSbStatus(`Offline — ${days.length} days cached`);
         } else {
-          setSbStatus("Offline — no cached data available");
+          // No cache yet — show empty dashboard with message rather than upload screen
+          const placeholder = [{ uploadId: "offline", items: [], dates: { start: new Date().toISOString().split("T")[0], end: new Date().toISOString().split("T")[0] }, isEstimated: true, uploadType: "day", transactions: null, avgBasket: null }];
+          setAllDays(placeholder);
+          setSbStatus("Offline — connect to load your data");
         }
-      } catch (e) { setSbStatus("Offline — cache error"); }
+      } catch (e) {
+        const placeholder = [{ uploadId: "offline", items: [], dates: { start: new Date().toISOString().split("T")[0], end: new Date().toISOString().split("T")[0] }, isEstimated: true, uploadType: "day", transactions: null, avgBasket: null }];
+        setAllDays(placeholder);
+        setSbStatus("Offline — connect to load your data");
+      }
       setLoading(false);
       return;
     }
@@ -353,8 +360,12 @@ export default function App() {
       const days = await loadFromSupabase(cId);
       if (days.length > 0) {
         setAllDays(days);
-        // Save to localStorage for offline use
-        try { localStorage.setItem(`shopmate_data_${cId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
+        // Try to cache — may fail silently if storage is full
+        try {
+          // Only cache last 30 days to keep size manageable
+          const recent = days.slice(-30);
+          localStorage.setItem(`shopmate_data_${cId}`, JSON.stringify(recent));
+        } catch (e) { /* storage full — offline mode won't have cache */ }
       }
       setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
     } catch (e) { setSbStatus("Error: " + e.message); }
@@ -376,7 +387,7 @@ export default function App() {
         setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
         const days = await loadFromSupabase(clientId);
         setAllDays(days);
-        try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
+        try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days.slice(-30))); } catch (e) { /* storage full */ }
       } else { setSbStatus(`✗ ${result.error}`); }
       setTimeout(() => setSbStatus(""), 4000);
     } else {
@@ -392,7 +403,7 @@ export default function App() {
     if (clientId) {
       const days = await loadFromSupabase(clientId);
       setAllDays(days);
-      try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
+      try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days.slice(-30))); } catch (e) { /* storage full */ }
     }
   }, [clientId]);
 
