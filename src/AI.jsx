@@ -595,3 +595,481 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// WEATHER INTELLIGENCE — WeatherSection component
+// Paste this entire block into AI.jsx before the closing of the file
+// Also export WeatherSection at the bottom
+// ═══════════════════════════════════════════════════════════════════
+
+// ─── WEATHER CATEGORY MAP ───────────────────────────────────────
+// Maps EPOS categories to weather triggers
+// hot = 18°C+, warm = 13-17°C, cold = <8°C, rain = rainy day
+const WEATHER_CATEGORY_MAP = {
+  hot: ["Soft Drinks", "Cold Drinks", "Drinks", "Energy Drinks", "Water", "Sports Drinks",
+        "Beer", "Cider", "Alcohol", "Lager", "Ice Cream", "Frozen", "Ice Lollies",
+        "Crisps", "Snacks", "Confectionery"],
+  warm: ["Soft Drinks", "Cold Drinks", "Drinks", "Energy Drinks", "Beer", "Cider",
+         "Alcohol", "Snacks", "Crisps"],
+  cold: ["Hot Drinks", "Tea", "Coffee", "Soup", "Noodles", "Confectionery",
+         "Chocolate", "Sweets", "Biscuits", "Comfort Food"],
+  rain: ["Hot Drinks", "Tea", "Coffee", "Confectionery", "Chocolate", "Sweets",
+         "Biscuits", "Snacks", "Crisps", "Comfort Food"],
+};
+
+// UK convenience store typical uplift % by weather vs normal
+const UPLIFT = {
+  hot:  { min: 40, max: 70 },  // hot days: cold drinks etc +40-70%
+  warm: { min: 15, max: 30 },  // warm days: mild uplift
+  cold: { min: 10, max: 25 },  // cold snap: hot drinks etc up
+  rain: { min: 10, max: 20 },  // rain: slight comfort food bump
+};
+
+// ─── WEATHER HELPERS ────────────────────────────────────────────
+function classifyDay(maxTemp, description) {
+  const desc = (description || "").toLowerCase();
+  const isRain = desc.includes("rain") || desc.includes("shower") || desc.includes("drizzle");
+  if (maxTemp >= 22) return "hot";
+  if (maxTemp >= 18) return "hot";
+  if (maxTemp >= 13) return "warm";
+  if (maxTemp <= 7)  return "cold";
+  return isRain ? "rain" : "normal";
+}
+
+function weatherIcon(type, desc) {
+  const d = (desc || "").toLowerCase();
+  if (d.includes("thunder")) return "⛈️";
+  if (d.includes("snow"))    return "❄️";
+  if (d.includes("rain") || d.includes("shower") || d.includes("drizzle")) return "🌧️";
+  if (type === "hot")  return "☀️";
+  if (type === "warm") return "🌤️";
+  if (type === "cold") return "🧥";
+  return "🌥️";
+}
+
+function tempColor(temp) {
+  if (temp >= 22) return "#f97316";
+  if (temp >= 18) return "#eab308";
+  if (temp >= 13) return "#84cc16";
+  if (temp <= 7)  return "#60a5fa";
+  return "#94a3b8";
+}
+
+function dayLabel(dateStr) {
+  const d = new Date(dateStr + "T12:00:00");
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const diff = Math.round((d - today) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
+// ─── GET WEATHER-RELEVANT PRODUCTS FROM EPOS ────────────────────
+function getWeatherProducts(analysis, weatherType) {
+  if (!analysis || weatherType === "normal") return [];
+  const targetCats = WEATHER_CATEGORY_MAP[weatherType] || [];
+  const items = analysis.items || [];
+
+  // Find products whose category matches weather triggers
+  const matched = items.filter(item => {
+    const cat = (item.category || "").toLowerCase();
+    return targetCats.some(tc => cat.includes(tc.toLowerCase()) || tc.toLowerCase().includes(cat));
+  });
+
+  // Sort by revenue, dedupe, take top 8
+  const seen = new Set();
+  return matched
+    .sort((a, b) => (b.gross || 0) - (a.gross || 0))
+    .filter(item => {
+      if (seen.has(item.product)) return false;
+      seen.add(item.product);
+      return true;
+    })
+    .slice(0, 8)
+    .map(item => ({
+      product: item.product,
+      category: item.category,
+      weeklyVel: item.qty || 0,
+      gross: item.gross || 0,
+    }));
+}
+
+// ─── LOCATION SETUP ─────────────────────────────────────────────
+async function geocodeLocation(query) {
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en&format=json`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.results?.length) throw new Error("Location not found");
+  // Prefer UK results
+  const uk = data.results.find(r => r.country_code === "GB") || data.results[0];
+  return { name: uk.name, lat: uk.latitude, lon: uk.longitude, country: uk.country };
+}
+
+async function fetchForecast(lat, lon) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,precipitation_sum,weathercode&timezone=Europe%2FLondon&forecast_days=7`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.daily) throw new Error("Weather data unavailable");
+
+  return data.daily.time.map((date, i) => ({
+    date,
+    maxTemp: Math.round(data.daily.temperature_2m_max[i]),
+    precipitation: data.daily.precipitation_sum[i],
+    weatherCode: data.daily.weathercode[i],
+    description: wmoDescription(data.daily.weathercode[i]),
+  }));
+}
+
+// WMO weather code to description
+function wmoDescription(code) {
+  if (code === 0) return "Clear sky";
+  if (code <= 3) return "Partly cloudy";
+  if (code <= 49) return "Foggy";
+  if (code <= 59) return "Drizzle";
+  if (code <= 69) return "Rain";
+  if (code <= 79) return "Snow";
+  if (code <= 84) return "Rain showers";
+  if (code <= 94) return "Snow showers";
+  return "Thunderstorm";
+}
+
+// ─── SAVE/LOAD LOCATION ─────────────────────────────────────────
+async function saveClientLocation(clientId, locationName, lat, lon) {
+  const { SUPABASE_URL, SUPABASE_KEY } = await import("./config.js");
+  const locationStr = JSON.stringify({ name: locationName, lat, lon });
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${clientId}`, {
+    method: "PATCH",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+      "x-client-id": clientId,
+    },
+    body: JSON.stringify({ location: locationStr }),
+  });
+  if (!r.ok) throw new Error("Failed to save location");
+}
+
+async function loadClientLocation(clientId) {
+  const { SUPABASE_URL, SUPABASE_KEY } = await import("./config.js");
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${clientId}&select=location`, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "x-client-id": clientId,
+    },
+  });
+  const rows = await r.json();
+  if (!rows.length || !rows[0].location) return null;
+  try { return JSON.parse(rows[0].location); } catch { return null; }
+}
+
+// ─── WEATHER SECTION COMPONENT ──────────────────────────────────
+export function WeatherSection({ clientId, analysis }) {
+  const [location, setLocation]       = useState(null);
+  const [forecast, setForecast]       = useState(null);
+  const [loadingLoc, setLoadingLoc]   = useState(true);
+  const [loadingFc, setLoadingFc]     = useState(false);
+  const [setupMode, setSetupMode]     = useState(false);
+  const [query, setQuery]             = useState("");
+  const [searching, setSearching]     = useState(false);
+  const [searchMsg, setSearchMsg]     = useState(null);
+  const [aiPlan, setAiPlan]           = useState(null);
+  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [expandedDay, setExpandedDay] = useState(null);
+
+  // Load saved location on mount
+  useEffect(() => {
+    if (!clientId) { setLoadingLoc(false); return; }
+    (async () => {
+      try {
+        // Check localStorage first for speed
+        const cached = localStorage.getItem(`weather_loc_${clientId}`);
+        if (cached) {
+          const loc = JSON.parse(cached);
+          setLocation(loc);
+          loadWeather(loc.lat, loc.lon);
+        } else {
+          const loc = await loadClientLocation(clientId);
+          if (loc) {
+            setLocation(loc);
+            localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
+            loadWeather(loc.lat, loc.lon);
+          }
+        }
+      } catch (e) { console.error("Load location:", e); }
+      setLoadingLoc(false);
+    })();
+  }, [clientId]);
+
+  const loadWeather = async (lat, lon) => {
+    setLoadingFc(true);
+    try {
+      const fc = await fetchForecast(lat, lon);
+      setForecast(fc);
+    } catch (e) { console.error("Forecast:", e); }
+    setLoadingFc(false);
+  };
+
+  const handleSearch = async () => {
+    if (!query.trim()) return;
+    setSearching(true); setSearchMsg(null);
+    try {
+      const result = await geocodeLocation(query.trim());
+      // Save to Supabase + localStorage
+      await saveClientLocation(clientId, result.name, result.lat, result.lon);
+      const loc = { name: result.name, lat: result.lat, lon: result.lon };
+      localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
+      setLocation(loc);
+      setSetupMode(false);
+      loadWeather(loc.lat, loc.lon);
+    } catch (e) { setSearchMsg(e.message || "Could not find location"); }
+    setSearching(false);
+  };
+
+  const generatePlan = async (dayData) => {
+    if (!analysis || !ANTHROPIC_KEY) return;
+    setLoadingPlan(true); setAiPlan(null);
+    const weatherType = classifyDay(dayData.maxTemp, dayData.description);
+    const products = getWeatherProducts(analysis, weatherType);
+    const uplift = UPLIFT[weatherType] || { min: 0, max: 0 };
+
+    const prompt = `You are a UK convenience store retail advisor. A store is preparing for upcoming weather.
+
+DATE: ${dayLabel(dayData.date)} (${dayData.date})
+WEATHER: ${dayData.description}, ${dayData.maxTemp}°C max
+WEATHER TYPE: ${weatherType.toUpperCase()}
+
+STORE'S TOP WEATHER-RELEVANT PRODUCTS (from their actual EPOS data):
+${products.map(p => `- ${p.product} (${p.category}): sells ~${p.weeklyVel} units/period, £${p.gross.toFixed(0)} revenue`).join("\n")}
+
+Based on this specific store's actual product mix and the ${weatherType} weather forecast, write a concise preparation plan.
+
+Include:
+1. Which specific products from THEIR list to prioritise and by how much (use the ${uplift.min}-${uplift.max}% typical uplift range for ${weatherType} weather)
+2. Any shelf positioning or display advice
+3. One specific ordering action to take NOW
+
+Keep it under 120 words. Be specific to their actual products — no generic advice. Use bullet points.`;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: AI_HDR,
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 300, messages: [{ role: "user", content: prompt }] }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
+      setAiPlan({ text, date: dayData.date });
+    } catch (e) { setAiPlan({ text: "Could not generate plan: " + e.message, date: dayData.date }); }
+    setLoadingPlan(false);
+  };
+
+  // ── LOADING ──
+  if (loadingLoc) return (
+    <SectionCard title="Weather Intelligence" icon="🌤️">
+      <div style={{ padding: 20, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Loading...</div>
+    </SectionCard>
+  );
+
+  // ── SETUP: no location set ──
+  if (!location || setupMode) return (
+    <SectionCard title="Weather Intelligence" icon="🌤️">
+      <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>
+        Enter your store's town or postcode to get a personalised 7-day weather forecast with stock recommendations based on your actual sales data.
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>STORE LOCATION</div>
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setSearchMsg(null); }}
+        onKeyDown={e => e.key === "Enter" && handleSearch()}
+        placeholder="e.g. Ipswich, IP1 or Norwich"
+        style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 14, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8 }}
+        autoFocus
+      />
+      {searchMsg && <div style={{ fontSize: 12, color: C.redText, marginBottom: 8 }}>{searchMsg}</div>}
+      <button
+        onClick={handleSearch}
+        disabled={searching || !query.trim()}
+        style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: query.trim() ? C.accentLight : C.surface, color: query.trim() ? C.white : C.textMuted, fontSize: 14, fontWeight: 700, cursor: "pointer" }}
+      >
+        {searching ? "Finding location..." : "Set Location →"}
+      </button>
+      {location && setupMode && (
+        <button onClick={() => setSetupMode(false)} style={{ width: "100%", marginTop: 8, padding: "10px", borderRadius: 10, border: `1px solid ${C.border}`, background: "none", color: C.textMuted, fontSize: 13, cursor: "pointer" }}>
+          Cancel
+        </button>
+      )}
+    </SectionCard>
+  );
+
+  // ── FORECAST VIEW ──
+  const notable = forecast ? forecast.filter(d => classifyDay(d.maxTemp, d.description) !== "normal") : [];
+
+  return (
+    <div>
+      <SectionCard title="Weather Intelligence" icon="🌤️">
+
+        {/* Location header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>📍 {location.name}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>7-day forecast · auto-updates daily</div>
+          </div>
+          <button onClick={() => setSetupMode(true)} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
+        </div>
+
+        {/* Loading forecast */}
+        {loadingFc && (
+          <div style={{ display: "flex", gap: 6 }}>
+            {[1,2,3,4,5,6,7].map(i => (
+              <div key={i} style={{ flex: 1, height: 72, borderRadius: 10, background: C.surface, border: `1px solid ${C.border}` }} />
+            ))}
+          </div>
+        )}
+
+        {/* 7-day strip */}
+        {forecast && !loadingFc && (
+          <div style={{ display: "flex", gap: 5, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" }}>
+            {forecast.map((day, i) => {
+              const type = classifyDay(day.maxTemp, day.description);
+              const isNotable = type !== "normal";
+              const isSelected = expandedDay === i;
+              return (
+                <div
+                  key={i}
+                  onClick={() => { setExpandedDay(isSelected ? null : i); setAiPlan(null); }}
+                  style={{ flex: "0 0 auto", width: 60, padding: "10px 6px", borderRadius: 10, textAlign: "center", cursor: "pointer", border: `1px solid ${isSelected ? C.accentLight : isNotable ? "rgba(234,179,8,0.3)" : C.border}`, background: isSelected ? "rgba(59,111,212,0.15)" : isNotable ? "rgba(234,179,8,0.05)" : C.surface, transition: "all 0.15s" }}
+                >
+                  <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>
+                    {i === 0 ? "Today" : new Date(day.date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" })}
+                  </div>
+                  <div style={{ fontSize: 18, marginBottom: 4 }}>{weatherIcon(type, day.description)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: tempColor(day.maxTemp) }}>{day.maxTemp}°</div>
+                  {isNotable && (
+                    <div style={{ fontSize: 8, marginTop: 3, fontWeight: 700, color: type === "hot" ? "#f97316" : type === "cold" ? "#60a5fa" : type === "rain" ? "#94a3b8" : "#84cc16", textTransform: "uppercase" }}>
+                      {type === "hot" ? "Hot" : type === "warm" ? "Warm" : type === "cold" ? "Cold" : "Rain"}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Expanded day detail */}
+        {forecast && expandedDay !== null && (
+          <div style={{ marginTop: 12, padding: "14px", borderRadius: 12, background: C.card, border: `1px solid ${C.border}` }}>
+            {(() => {
+              const day = forecast[expandedDay];
+              const type = classifyDay(day.maxTemp, day.description);
+              const products = getWeatherProducts(analysis, type);
+              const uplift = UPLIFT[type];
+              return (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>{dayLabel(day.date)}</div>
+                      <div style={{ fontSize: 12, color: C.textMuted }}>{day.description} · {day.maxTemp}°C</div>
+                    </div>
+                    <div style={{ fontSize: 28 }}>{weatherIcon(type, day.description)}</div>
+                  </div>
+
+                  {type === "normal" ? (
+                    <div style={{ fontSize: 12, color: C.textMuted }}>Normal trading day — no significant weather impact expected.</div>
+                  ) : (
+                    <>
+                      {/* Uplift banner */}
+                      <div style={{ padding: "8px 12px", borderRadius: 8, background: type === "hot" ? "rgba(249,115,22,0.1)" : type === "cold" ? "rgba(96,165,250,0.1)" : "rgba(148,163,184,0.1)", border: `1px solid ${type === "hot" ? "rgba(249,115,22,0.2)" : type === "cold" ? "rgba(96,165,250,0.2)" : "rgba(148,163,184,0.2)"}`, marginBottom: 12 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: type === "hot" ? "#f97316" : type === "cold" ? "#60a5fa" : "#94a3b8", marginBottom: 2 }}>
+                          {type === "hot" ? "🔥 HOT DAY — STOCK UP" : type === "warm" ? "🌤️ WARM DAY — PREP NOW" : type === "cold" ? "🧥 COLD SNAP — PUSH HOT DRINKS" : "🌧️ RAIN DAY — COMFORT PRODUCTS"}
+                        </div>
+                        {uplift && <div style={{ fontSize: 11, color: C.textSecondary }}>Expect {uplift.min}–{uplift.max}% uplift on weather-sensitive products</div>}
+                      </div>
+
+                      {/* Your products to watch */}
+                      {products.length > 0 && (
+                        <>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Your Products to Watch</div>
+                          {products.slice(0, 5).map((p, i) => {
+                            const estUplift = uplift ? Math.round(p.weeklyVel * (uplift.min / 100)) : 0;
+                            return (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.divider}` }}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{p.product}</div>
+                                  <div style={{ fontSize: 10, color: C.textMuted }}>{p.category} · {p.weeklyVel} units/period</div>
+                                </div>
+                                {estUplift > 0 && (
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, background: C.greenDim, padding: "2px 8px", borderRadius: 6 }}>
+                                    +{estUplift} est.
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+
+                      {/* AI Plan button */}
+                      {ANTHROPIC_KEY && (
+                        <button
+                          onClick={() => generatePlan(day)}
+                          disabled={loadingPlan}
+                          style={{ width: "100%", marginTop: 12, padding: "10px", borderRadius: 10, border: "none", background: C.accentLight, color: C.white, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: loadingPlan ? 0.7 : 1 }}
+                        >
+                          {loadingPlan ? "Generating plan..." : "✨ Generate AI Prep Plan"}
+                        </button>
+                      )}
+
+                      {/* AI Plan output */}
+                      {aiPlan && aiPlan.date === day.date && (
+                        <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 10, background: "linear-gradient(135deg, rgba(46,80,144,0.12), rgba(59,130,246,0.06))", border: "1px solid rgba(46,80,144,0.2)" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>✨ AI Prep Plan</div>
+                          <div style={{ fontSize: 12, color: C.textPrimary, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{aiPlan.text}</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+
+      </SectionCard>
+
+      {/* Notable days summary */}
+      {notable.length > 0 && !loadingFc && (
+        <SectionCard title="This Week's Alerts" icon="⚠️">
+          {notable.map((day, i) => {
+            const type = classifyDay(day.maxTemp, day.description);
+            const products = getWeatherProducts(analysis, type);
+            const borderCol = type === "hot" ? "rgba(249,115,22,0.3)" : type === "cold" ? "rgba(96,165,250,0.3)" : "rgba(148,163,184,0.3)";
+            const bgCol = type === "hot" ? "rgba(249,115,22,0.05)" : type === "cold" ? "rgba(96,165,250,0.05)" : "rgba(148,163,184,0.05)";
+            return (
+              <div key={i} style={{ padding: "12px 14px", marginBottom: 8, borderRadius: 10, background: bgCol, border: `1px solid ${borderCol}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{dayLabel(day.date)} · {weatherIcon(type, day.description)} {day.maxTemp}°C</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>{day.description}</div>
+                  </div>
+                  <div style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: type === "hot" ? "rgba(249,115,22,0.15)" : type === "cold" ? "rgba(96,165,250,0.15)" : "rgba(148,163,184,0.15)", color: type === "hot" ? "#f97316" : type === "cold" ? "#60a5fa" : "#94a3b8" }}>
+                    {type.toUpperCase()}
+                  </div>
+                </div>
+                {products.length > 0 && (
+                  <div style={{ fontSize: 11, color: C.textSecondary }}>
+                    Stock up: {products.slice(0, 3).map(p => p.product).join(", ")}{products.length > 3 ? ` +${products.length - 3} more` : ""}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </SectionCard>
+      )}
+    </div>
+  );
+}
