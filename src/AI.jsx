@@ -401,34 +401,39 @@ export function NewsSection() {
 
 const TRENDS_CACHE_KEY = "shopmate_trends_cache_v2";
 const TRENDS_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_REFRESHES_PER_DAY = 3;
 
 function getTrendsCache() {
   try {
     const raw = localStorage.getItem(TRENDS_CACHE_KEY);
     if (!raw) return null;
-    const { ts, data } = JSON.parse(raw);
+    const { ts, trends } = JSON.parse(raw);
     if (Date.now() - ts > TRENDS_TTL) return null;
-    return { ...data, ts };
+    return { trends, ts };
   } catch { return null; }
 }
 
-function setTrendsCache(data) {
-  try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
+function setTrendsCache(trends) {
+  try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), trends })); } catch {}
 }
 
-// Returns true if a manual refresh has already been done today
-function alreadyRefreshedToday() {
+// Returns how many refreshes have been done today
+function getRefreshCountToday() {
   try {
-    const raw = localStorage.getItem("shopmate_trends_last_refresh");
-    if (!raw) return false;
-    const lastRefresh = new Date(parseInt(raw));
-    const now = new Date();
-    return lastRefresh.toDateString() === now.toDateString();
-  } catch { return false; }
+    const raw = localStorage.getItem("ri_trends_refreshes");
+    if (!raw) return 0;
+    const { date, count } = JSON.parse(raw);
+    if (date !== new Date().toDateString()) return 0;
+    return count;
+  } catch { return 0; }
 }
 
-function markRefreshedToday() {
-  try { localStorage.setItem("shopmate_trends_last_refresh", Date.now().toString()); } catch {}
+function incrementRefreshCount() {
+  try {
+    const count = getRefreshCountToday() + 1;
+    localStorage.setItem("ri_trends_refreshes", JSON.stringify({ date: new Date().toDateString(), count }));
+    return count;
+  } catch { return 1; }
 }
 
 const HEAT_CONFIG = {
@@ -497,7 +502,10 @@ export function TrendsSection() {
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError]     = useState(false);
-  const [refreshedToday, setRefreshedToday] = useState(alreadyRefreshedToday());
+  const [refreshCount, setRefreshCount] = useState(getRefreshCountToday());
+
+  const refreshesLeft = MAX_REFRESHES_PER_DAY - refreshCount;
+  const canRefresh = refreshesLeft > 0;
 
   // On mount — load from cache only, never auto-fetch
   useEffect(() => {
@@ -509,8 +517,7 @@ export function TrendsSection() {
   }, []);
 
   const fetchTrends = async () => {
-    // Enforce one manual refresh per day
-    if (refreshedToday) return;
+    if (!canRefresh || loading) return;
     if (!ANTHROPIC_KEY) { setTrends([]); return; }
     setLoading(true); setError(false);
 
@@ -562,11 +569,11 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       if (j1 < 0) throw new Error("No trends found");
       const parsed = JSON.parse(clean.slice(j1, j2 + 1));
       const ts = Date.now();
-      setTrendsCache({ trends: parsed, ts });
+      setTrendsCache(parsed);
       setTrends(parsed);
       setLastUpdated(new Date(ts));
-      markRefreshedToday();
-      setRefreshedToday(true);
+      const newCount = incrementRefreshCount();
+      setRefreshCount(newCount);
     } catch (e) {
       console.error("Trends fetch:", e);
       setError(true);
@@ -585,8 +592,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
           <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
         </div>
-        <button onClick={fetchTrends} disabled={loading || refreshedToday} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: refreshedToday ? "#334155" : "#64748b", fontSize: 11, fontWeight: 600, cursor: (loading || refreshedToday) ? "default" : "pointer", opacity: (loading || refreshedToday) ? 0.5 : 1 }} title={refreshedToday ? "Already refreshed today — resets tomorrow" : "Refresh trends (once per day)"}>
-          {loading ? "..." : refreshedToday ? "✓ Done today" : "↻ Refresh"}
+        <button onClick={fetchTrends} disabled={loading || !canRefresh} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: canRefresh ? "#64748b" : "#334155", fontSize: 11, fontWeight: 600, cursor: (loading || !canRefresh) ? "default" : "pointer", opacity: (loading || !canRefresh) ? 0.5 : 1 }} title={canRefresh ? `${refreshesLeft} refresh${refreshesLeft !== 1 ? "es" : ""} left today` : "No refreshes left today — resets tomorrow"}>
+          {loading ? "..." : !canRefresh ? "✓ Limit reached" : `↻ Refresh (${refreshesLeft} left)`}
         </button>
       </div>
 
