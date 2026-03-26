@@ -9,7 +9,7 @@ import Dashboard from "./Dashboard.jsx";
 import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopSellersSection, HiddenProfitSection, OpsSection, ActionsSection, ShelfDensitySection, CompetitorPricingSection, ClearShelfSection } from "./Sections.jsx";
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
-import { AIChatSection, ComingUpSection, NewsSection, TrendsSection } from "./AI.jsx";
+import { AIChatSection, ComingUpSection, NewsSection, TrendsSection, WeatherSection } from "./AI.jsx";
 import LeafletScanner from "./Promos.jsx";
 
 // ─── OFFLINE BANNER ─────────────────────────────────────────────
@@ -134,13 +134,14 @@ const monthlySections = [
 ];
 const alwaysSections = [
   { id: "leaflet", label: "Promotions", icon: "🎯" },
+  { id: "weather", label: "Weather", icon: "🌤️" },
   { id: "coming", label: "Coming Up", icon: "📅" },
   { id: "trends", label: "Social Media", icon: "🔥" },
   { id: "settings", label: "Settings", icon: "⚙️" },
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Viral & trending products" };
+const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", weather: "7-day forecast & stock prep", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Viral & trending products" };
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -557,6 +558,7 @@ export default function App() {
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
       case "leaflet":    return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
+      case "weather":    return <WeatherSection clientId={clientId} analysis={analysis} />;
       case "coming":     return <ComingUpSection />;
       case "trends":     return <TrendsSection />;
       case "settings":   return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
