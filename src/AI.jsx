@@ -400,7 +400,7 @@ export function NewsSection() {
 // Uses Claude web search (once per day, cached in localStorage)
 
 const TRENDS_CACHE_KEY = "shopmate_trends_cache_v2";
-const TRENDS_TTL = 23 * 60 * 60 * 1000; // 23 hours
+const TRENDS_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 function getTrendsCache() {
   try {
@@ -408,12 +408,27 @@ function getTrendsCache() {
     if (!raw) return null;
     const { ts, data } = JSON.parse(raw);
     if (Date.now() - ts > TRENDS_TTL) return null;
-    return data;
+    return { ...data, ts };
   } catch { return null; }
 }
 
 function setTrendsCache(data) {
   try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
+}
+
+// Returns true if a manual refresh has already been done today
+function alreadyRefreshedToday() {
+  try {
+    const raw = localStorage.getItem("shopmate_trends_last_refresh");
+    if (!raw) return false;
+    const lastRefresh = new Date(parseInt(raw));
+    const now = new Date();
+    return lastRefresh.toDateString() === now.toDateString();
+  } catch { return false; }
+}
+
+function markRefreshedToday() {
+  try { localStorage.setItem("shopmate_trends_last_refresh", Date.now().toString()); } catch {}
 }
 
 const HEAT_CONFIG = {
@@ -482,12 +497,20 @@ export function TrendsSection() {
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError]     = useState(false);
+  const [refreshedToday, setRefreshedToday] = useState(alreadyRefreshedToday());
 
-  const fetchTrends = async (force = false) => {
-    if (!force) {
-      const cached = getTrendsCache();
-      if (cached) { setTrends(cached.trends); setLastUpdated(new Date(cached.ts)); return; }
+  // On mount — load from cache only, never auto-fetch
+  useEffect(() => {
+    const cached = getTrendsCache();
+    if (cached) {
+      setTrends(cached.trends);
+      setLastUpdated(new Date(cached.ts));
     }
+  }, []);
+
+  const fetchTrends = async () => {
+    // Enforce one manual refresh per day
+    if (refreshedToday) return;
     if (!ANTHROPIC_KEY) { setTrends([]); return; }
     setLoading(true); setError(false);
 
@@ -542,6 +565,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       setTrendsCache({ trends: parsed, ts });
       setTrends(parsed);
       setLastUpdated(new Date(ts));
+      markRefreshedToday();
+      setRefreshedToday(true);
     } catch (e) {
       console.error("Trends fetch:", e);
       setError(true);
@@ -549,10 +574,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
     setLoading(false);
   };
 
-  useEffect(() => { fetchTrends(false); }, []);
-
   const cacheAge = lastUpdated ? Math.round((Date.now() - lastUpdated) / 3600000) : null;
-  const ageLabel = cacheAge === 0 ? "Updated just now" : cacheAge === 1 ? "Updated 1 hour ago" : cacheAge != null ? `Updated ${cacheAge}h ago` : "UK social & viral products";
+  const ageLabel = cacheAge === 0 ? "Updated just now" : cacheAge === 1 ? "Updated 1 hour ago" : cacheAge != null ? `Updated ${cacheAge}h ago` : "Tap refresh to load trends";
 
   return (
     <div style={{ paddingTop: 4 }}>
@@ -562,8 +585,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
           <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
         </div>
-        <button onClick={() => fetchTrends(true)} disabled={loading} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: "#64748b", fontSize: 11, fontWeight: 600, cursor: loading ? "default" : "pointer", opacity: loading ? 0.5 : 1 }}>
-          {loading ? "..." : "↻ Refresh"}
+        <button onClick={fetchTrends} disabled={loading || refreshedToday} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: refreshedToday ? "#334155" : "#64748b", fontSize: 11, fontWeight: 600, cursor: (loading || refreshedToday) ? "default" : "pointer", opacity: (loading || refreshedToday) ? 0.5 : 1 }} title={refreshedToday ? "Already refreshed today — resets tomorrow" : "Refresh trends (once per day)"}>
+          {loading ? "..." : refreshedToday ? "✓ Done today" : "↻ Refresh"}
         </button>
       </div>
 
@@ -599,9 +622,12 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
         </div>
       )}
 
-      {!ANTHROPIC_KEY && !loading && (
-        <div style={{ padding: 20, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b", fontSize: 12, color: "#64748b" }}>
-          API key required to load trends
+      {!loading && !error && !trends && (
+        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, background: "#0f172a", border: "1px solid #1e293b" }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>🔥</div>
+          <div style={{ fontSize: 13, color: "#ffffff", fontWeight: 600, marginBottom: 4 }}>No trends loaded yet</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>Tap Refresh to search for what's trending in UK corner shops right now</div>
+          <button onClick={fetchTrends} disabled={loading} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#3b6fd4", color: "#ffffff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>↻ Load Trends</button>
         </div>
       )}
 
