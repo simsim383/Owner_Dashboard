@@ -326,15 +326,32 @@ export default function App() {
   // Called by AuthScreen when login/setup succeeds
   const handleAuthenticated = async (cId, cName) => {
     setClientId(cId); setClientName(cName); setAuthenticated(true);
+
+    // ── Offline path: load from localStorage cache ──
     if (!navigator.onLine) {
-      setSbStatus("Offline — showing cached data");
+      try {
+        const cached = localStorage.getItem(`shopmate_data_${cId}`);
+        if (cached) {
+          const days = JSON.parse(cached);
+          setAllDays(days);
+          setSbStatus(`Offline — ${days.length} days cached`);
+        } else {
+          setSbStatus("Offline — no cached data available");
+        }
+      } catch (e) { setSbStatus("Offline — cache error"); }
       setLoading(false);
       return;
     }
+
+    // ── Online path: load from Supabase and update cache ──
     setLoading(true);
     try {
       const days = await loadFromSupabase(cId);
-      if (days.length > 0) setAllDays(days);
+      if (days.length > 0) {
+        setAllDays(days);
+        // Save to localStorage for offline use
+        try { localStorage.setItem(`shopmate_data_${cId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
+      }
       setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
     } catch (e) { setSbStatus("Error: " + e.message); }
     setLoading(false);
@@ -352,7 +369,9 @@ export default function App() {
       const result = await pushToSupabase(clientId, data, uploadType || "day", transactions);
       if (result.ok) {
         setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
-        const days = await loadFromSupabase(clientId); setAllDays(days);
+        const days = await loadFromSupabase(clientId);
+        setAllDays(days);
+        try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
       } else { setSbStatus(`✗ ${result.error}`); }
       setTimeout(() => setSbStatus(""), 4000);
     } else {
@@ -365,7 +384,11 @@ export default function App() {
   }, [clientId]);
 
   const refreshData = useCallback(async () => {
-    if (clientId) { const days = await loadFromSupabase(clientId); setAllDays(days); }
+    if (clientId) {
+      const days = await loadFromSupabase(clientId);
+      setAllDays(days);
+      try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days)); } catch (e) { /* storage full */ }
+    }
   }, [clientId]);
 
   const handleViewDay = useCallback((date) => {
