@@ -3,24 +3,43 @@
 // ═══════════════════════════════════════════════════════════════════
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 
-const HDR = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" };
+// Base headers (no client ID — used for open/onboarding endpoints)
+const BASE_HDR = {
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  "Content-Type": "application/json",
+  Prefer: "return=representation",
+};
 
-async function sbGet(t, p = "") {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`, { headers: HDR });
+// Headers with client ID injected — used for all protected table operations
+function hdrs(clientId) {
+  return clientId
+    ? { ...BASE_HDR, "x-client-id": clientId }
+    : BASE_HDR;
+}
+
+async function sbGet(t, p = "", clientId = null) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`, { headers: hdrs(clientId) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.message || `GET ${t} failed`); }
   return r.json();
 }
-async function sbPost(t, b) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: "POST", headers: HDR, body: JSON.stringify(b) });
+async function sbPost(t, b, clientId = null) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}`, { method: "POST", headers: hdrs(clientId), body: JSON.stringify(b) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.message || `POST ${t} failed`); }
   return r.json();
 }
-async function sbDelete(t, p) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`, { method: "DELETE", headers: HDR });
+async function sbPatch(t, p, b, clientId = null) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`, { method: "PATCH", headers: hdrs(clientId), body: JSON.stringify(b) });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.message || `PATCH ${t} failed`); }
+  return r.json();
+}
+async function sbDelete(t, p, clientId = null) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${t}?${p}`, { method: "DELETE", headers: hdrs(clientId) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e?.message || `DELETE ${t} failed`); }
   return r.json();
 }
 
+// ─── LOCAL STORAGE HELPERS ──────────────────────────────────────
 // Get owner ID — localStorage is the source of truth, URL is fallback for first visit only
 export function getSavedOwnerId() {
   return localStorage.getItem("shopmate_owner_id") || null;
@@ -45,13 +64,14 @@ export function logout() {
   localStorage.removeItem("shopmate_owner_id");
 }
 
+// ─── AUTH / PIN ──────────────────────────────────────────────────
 export async function verifyPin(clientId, pin) {
   if (!clientId || !pin) return false;
   try {
+    // clients table uses open policy — no clientId header needed for PIN lookup
     const rows = await sbGet("clients", `id=eq.${encodeURIComponent(clientId)}&select=pin`);
     if (!rows.length) return false;
-    // If no PIN set yet, any PIN is accepted (first-time setup)
-    if (!rows[0].pin) return true;
+    if (!rows[0].pin) return true; // First-time setup: any PIN accepted
     return rows[0].pin === pin;
   } catch (e) {
     console.error("PIN verify:", e);
@@ -62,11 +82,7 @@ export async function verifyPin(clientId, pin) {
 export async function setPin(clientId, pin) {
   if (!clientId || !pin) return;
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${encodeURIComponent(clientId)}`, {
-      method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-      body: JSON.stringify({ pin }),
-    });
-    if (!r.ok) throw new Error("Failed to set PIN");
+    await sbPatch("clients", `id=eq.${encodeURIComponent(clientId)}`, { pin });
   } catch (e) { console.error("Set PIN:", e); }
 }
 
@@ -84,6 +100,35 @@ export async function getOrCreateClient(ownerId) {
   }
 }
 
+// ─── ONBOARDING ─────────────────────────────────────────────────
+// These use open policies — no clientId header needed
+export async function checkInviteCode(code) {
+  const rows = await sbGet("invite_codes", `code=eq.${encodeURIComponent(code)}&limit=1`);
+  if (!rows.length) return { valid: false, error: "Invalid code" };
+  if (rows[0].used) return { valid: false, error: "Code already used" };
+  return { valid: true };
+}
+
+export async function claimOwnerId(id, inviteCode) {
+  const [takenOwner, takenClient] = await Promise.all([
+    sbGet("owner_ids", `id=eq.${encodeURIComponent(id)}&limit=1`),
+    sbGet("clients", `name=eq.${encodeURIComponent(id)}&limit=1`),
+  ]);
+  if (takenOwner.length > 0 || takenClient.length > 0) {
+    throw new Error("ID already taken");
+  }
+  await sbPost("owner_ids", [{ id, created_at: new Date().toISOString() }]);
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/invite_codes?code=eq.${encodeURIComponent(inviteCode)}`, {
+    method: "PATCH",
+    headers: { ...BASE_HDR, Prefer: "return=representation" },
+    body: JSON.stringify({ used: true, used_by: id, used_at: new Date().toISOString() }),
+  });
+  if (!r.ok) throw new Error("Failed to mark code as used");
+  await sbPost("clients", [{ name: id, owner_name: id }]);
+  return { ok: true };
+}
+
+// ─── UPLOADS ────────────────────────────────────────────────────
 export async function pushToSupabase(clientId, data, uploadType, transactions) {
   const startDate = data.dates?.start;
   const endDate = data.dates?.end;
@@ -104,12 +149,12 @@ export async function pushToSupabase(clientId, data, uploadType, transactions) {
   try {
     const uploadIds = [];
     for (const date of datesToInsert) {
-      const existing = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&report_date=eq.${date}`);
+      const existing = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&report_date=eq.${date}`, clientId);
       if (existing.length > 0) {
         const ex = existing[0];
         if (!ex.is_estimated && isEstimated) { console.log(`Skipping ${date} — actual data exists`); continue; }
-        await sbDelete("daily_sales", `upload_id=eq.${ex.id}`);
-        await sbDelete("uploads", `id=eq.${ex.id}`);
+        await sbDelete("daily_sales", `upload_id=eq.${ex.id}`, clientId);
+        await sbDelete("uploads", `id=eq.${ex.id}`, clientId);
       }
       const [upload] = await sbPost("uploads", [{
         client_id: clientId, report_date: date, report_start: startDate, report_end: endDate,
@@ -119,7 +164,7 @@ export async function pushToSupabase(clientId, data, uploadType, transactions) {
         upload_type: uploadType, is_estimated: isEstimated,
         transactions: dailyTrans,
         avg_basket: dailyTrans ? Math.round((totalGross / divisor) / dailyTrans * 100) / 100 : null,
-      }]);
+      }], clientId);
       const rows = data.items.map(i => ({
         client_id: clientId, upload_id: upload.id, report_date: date,
         barcode: i.barcode, product: i.product, category: i.category,
@@ -129,7 +174,7 @@ export async function pushToSupabase(clientId, data, uploadType, transactions) {
         gross_profit: i.grossProfit != null ? Math.round((i.grossProfit / divisor) * 100) / 100 : null,
         gross_margin: i.grossMargin, has_cost_data: i.hasCost, is_estimated: isEstimated,
       }));
-      for (let i = 0; i < rows.length; i += 100) { await sbPost("daily_sales", rows.slice(i, i + 100)); }
+      for (let i = 0; i < rows.length; i += 100) { await sbPost("daily_sales", rows.slice(i, i + 100), clientId); }
       uploadIds.push(upload.id);
       console.log(`${date}: ${isEstimated ? "estimated" : "actual"} — ${rows.length} rows`);
     }
@@ -137,75 +182,54 @@ export async function pushToSupabase(clientId, data, uploadType, transactions) {
   } catch (e) { console.error("Push failed:", e); return { ok: false, error: e.message }; }
 }
 
-export async function deleteUpload(uploadId) {
+export async function deleteUpload(uploadId, clientId) {
   try {
-    await sbDelete("daily_sales", `upload_id=eq.${uploadId}`);
-    await sbDelete("uploads", `id=eq.${uploadId}`);
+    await sbDelete("daily_sales", `upload_id=eq.${uploadId}`, clientId);
+    await sbDelete("uploads", `id=eq.${uploadId}`, clientId);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
 export async function loadUploadsMeta(clientId) {
   if (!clientId) return [];
-  try { return await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.desc&limit=365`); }
+  try { return await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.desc&limit=365`, clientId); }
   catch (e) { console.error("Load meta:", e); return []; }
 }
 
 export async function loadFromSupabase(clientId) {
   if (!clientId) return [];
   try {
-    const uploads = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.asc&limit=365`);
-    const allDays = [];
-    for (const u of uploads) {
-      const sales = await sbGet("daily_sales", `upload_id=eq.${u.id}&order=gross.desc`);
-      allDays.push({
-        uploadId: u.id,
-        items: sales.map(s => ({
-          barcode: s.barcode, product: s.product, category: s.category,
-          qty: s.qty, gross: Number(s.gross), net: Number(s.net),
-          grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
-          grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
-          hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
-        })),
-        dates: { start: u.report_date, end: u.report_date },
-        isEstimated: u.is_estimated || false,
-        uploadType: u.upload_type || "day",
-        transactions: u.transactions,
-        avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
-      });
+    const uploads = await sbGet("uploads", `client_id=eq.${encodeURIComponent(clientId)}&order=report_date.asc&limit=365`, clientId);
+    if (!uploads.length) return [];
+    const uploadIds = uploads.map(u => u.id);
+    // Single bulk call instead of one per upload
+    const salesChunks = [];
+    for (let i = 0; i < uploadIds.length; i += 50) {
+      const chunk = uploadIds.slice(i, i + 50);
+      const sales = await sbGet("daily_sales", `upload_id=in.(${chunk.join(",")})&order=gross.desc`, clientId);
+      salesChunks.push(...sales);
     }
-    return allDays;
+    const salesByUpload = {};
+    for (const s of salesChunks) {
+      if (!salesByUpload[s.upload_id]) salesByUpload[s.upload_id] = [];
+      salesByUpload[s.upload_id].push(s);
+    }
+    return uploads.map(u => ({
+      uploadId: u.id,
+      items: (salesByUpload[u.id] || []).map(s => ({
+        barcode: s.barcode, product: s.product, category: s.category,
+        qty: s.qty, gross: Number(s.gross), net: Number(s.net),
+        grossProfit: s.gross_profit != null ? Number(s.gross_profit) : null,
+        grossMargin: s.gross_margin != null ? Number(s.gross_margin) : null,
+        hasCost: s.has_cost_data, isEstimated: s.is_estimated || false,
+      })),
+      dates: { start: u.report_date, end: u.report_date },
+      isEstimated: u.is_estimated || false,
+      uploadType: u.upload_type || "day",
+      transactions: u.transactions,
+      avgBasket: u.avg_basket ? Number(u.avg_basket) : null,
+    }));
   } catch (e) { console.error("Load from Supabase:", e); return []; }
-}
-
-// ─── ONBOARDING ─────────────────────────────────────────────────
-export async function checkInviteCode(code) {
-  const rows = await sbGet("invite_codes", `code=eq.${encodeURIComponent(code)}&limit=1`);
-  if (!rows.length) return { valid: false, error: "Invalid code" };
-  if (rows[0].used) return { valid: false, error: "Code already used" };
-  return { valid: true };
-}
-
-export async function claimOwnerId(id, inviteCode) {
-  // Check not taken
-  const [takenOwner, takenClient] = await Promise.all([
-    sbGet("owner_ids", `id=eq.${encodeURIComponent(id)}&limit=1`),
-    sbGet("clients", `name=eq.${encodeURIComponent(id)}&limit=1`),
-  ]);
-  if (takenOwner.length > 0 || takenClient.length > 0) {
-    throw new Error("ID already taken");
-  }
-  // Claim it
-  await sbPost("owner_ids", [{ id, created_at: new Date().toISOString() }]);
-  // Mark invite code as used
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/invite_codes?code=eq.${encodeURIComponent(inviteCode)}`, {
-    method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-    body: JSON.stringify({ used: true, used_by: id, used_at: new Date().toISOString() }),
-  });
-  if (!r.ok) throw new Error("Failed to mark code as used");
-  // Create client record with PIN placeholder
-  await sbPost("clients", [{ name: id, owner_name: id }]);
-  return { ok: true };
 }
 
 // ─── PROMO STORAGE ──────────────────────────────────────────────
@@ -218,67 +242,60 @@ export async function savePromoScan(clientId, scan, decisions, skips) {
     buy_count: decisions.filter(d => d.decision === "BUY").length,
     test_count: decisions.filter(d => d.decision === "TEST").length,
     skip_count: (skips || []).length,
-  }]);
-  // Save decisions
+  }], clientId);
+
   if (decisions.length > 0) {
     await sbPost("promo_decisions", decisions.map(d => ({
       scan_id: scanRow.id, client_id: clientId, product: d.product, source: d.source,
       case_price: d.casePrice, por: d.por, rrp: d.rrp, vel: d.vel, qty: d.qty,
       cover: d.cover, units: d.units, total_inc: d.totalInc, decision: d.decision, notes: d.notes,
-    })));
+    })), clientId);
   }
-  // Save price history for WoW comparison
   if (decisions.length > 0) {
     await sbPost("promo_price_history", decisions.filter(d => d.casePrice).map(d => ({
       client_id: clientId, product: d.product, supplier: d.source, case_price: d.casePrice,
       rrp: d.rrp, scan_id: scanRow.id,
-    })));
+    })), clientId);
   }
-  // Save skips
   if (skips && skips.length > 0) {
-    await sbPost("promo_skips", skips.map(s => ({ scan_id: scanRow.id, product: s.product, reason: s.reason })));
+    await sbPost("promo_skips", skips.map(s => ({ scan_id: scanRow.id, product: s.product, reason: s.reason })), clientId);
   }
   return scanRow;
 }
 
 export async function loadPromoScans(clientId) {
-  return await sbGet("promo_scans", `client_id=eq.${clientId}&order=created_at.desc&limit=20`);
+  return await sbGet("promo_scans", `client_id=eq.${clientId}&order=created_at.desc&limit=20`, clientId);
 }
 
-export async function loadPromoDecisions(scanId) {
-  return await sbGet("promo_decisions", `scan_id=eq.${scanId}&order=decision.asc`);
+export async function loadPromoDecisions(scanId, clientId) {
+  return await sbGet("promo_decisions", `scan_id=eq.${scanId}&order=decision.asc`, clientId);
 }
 
-export async function loadPromoSkips(scanId) {
-  return await sbGet("promo_skips", `scan_id=eq.${scanId}`);
+export async function loadPromoSkips(scanId, clientId) {
+  return await sbGet("promo_skips", `scan_id=eq.${scanId}`, clientId);
 }
 
 export async function loadPriceHistory(clientId, productName) {
-  return await sbGet("promo_price_history", `client_id=eq.${clientId}&product=eq.${encodeURIComponent(productName)}&order=scan_date.desc&limit=10`);
+  return await sbGet("promo_price_history", `client_id=eq.${clientId}&product=eq.${encodeURIComponent(productName)}&order=scan_date.desc&limit=10`, clientId);
 }
 
 export async function loadAllPriceHistory(clientId) {
-  return await sbGet("promo_price_history", `client_id=eq.${clientId}&order=scan_date.desc&limit=500`);
+  return await sbGet("promo_price_history", `client_id=eq.${clientId}&order=scan_date.desc&limit=500`, clientId);
 }
 
-export async function updatePromoDecision(decisionId, updates) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_decisions?id=eq.${decisionId}`, {
-    method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-    body: JSON.stringify(updates),
-  });
-  if (!r.ok) throw new Error("Failed to update decision");
-  return r.json();
+export async function updatePromoDecision(decisionId, updates, clientId) {
+  return await sbPatch("promo_decisions", `id=eq.${decisionId}`, updates, clientId);
 }
 
-export async function deletePromoScan(scanId) {
-  await sbDelete("promo_scans", `id=eq.${scanId}`);
+export async function deletePromoScan(scanId, clientId) {
+  await sbDelete("promo_scans", `id=eq.${scanId}`, clientId);
   return { ok: true };
 }
 
 export async function saveCorrection(clientId, productPattern, correctionType, correctionValue) {
-  await sbPost("promo_corrections", [{ client_id: clientId, product_pattern: productPattern, correction_type: correctionType, correction_value: correctionValue }]);
+  await sbPost("promo_corrections", [{ client_id: clientId, product_pattern: productPattern, correction_type: correctionType, correction_value: correctionValue }], clientId);
 }
 
 export async function loadCorrections(clientId) {
-  return await sbGet("promo_corrections", `client_id=eq.${clientId}&order=created_at.desc&limit=100`);
+  return await sbGet("promo_corrections", `client_id=eq.${clientId}&order=created_at.desc&limit=100`, clientId);
 }
