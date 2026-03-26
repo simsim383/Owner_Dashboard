@@ -44,10 +44,10 @@ function buildVelocityMap(allDays) {
     const m = monthMap[key];
     const y = yearMap[key];
 
-    const weeklyVel  = w ? Math.round((w.qty / Math.max(1, last7.length / 7)) * 10) / 10 : 0;
+    const weeklyVel  = w ? w.qty : 0;
     const monthlyAvg = m ? Math.round((m.qty / Math.max(1, last28.length / 7)) * 10) / 10 : 0;
     const yearlyAvg  = y ? Math.round((y.qty / Math.max(1, allTime.length / 7)) * 10) / 10 : 0;
-    const isOneOff   = weeklyVel >= 3 && yearlyAvg < 0.5 && monthlyAvg < 1;
+    const isOneOff   = weeklyVel >= 3 && yearlyAvg < 0.5;
 
     let blended;
     if (isOneOff)                         blended = 0;
@@ -55,17 +55,13 @@ function buildVelocityMap(allDays) {
     else if (weeklyVel < yearlyAvg * 0.5) blended = Math.round(((weeklyVel * 0.2) + (monthlyAvg * 0.3) + (yearlyAvg * 0.5)) * 10) / 10;
     else                                  blended = Math.round(((weeklyVel * 0.4) + (monthlyAvg * 0.35) + (yearlyAvg * 0.25)) * 10) / 10;
 
-    // Spike detection: how inflated is recent vs long-run?
-    const spikeRatio = yearlyAvg > 0 ? Math.round((weeklyVel / yearlyAvg) * 10) / 10 : 0;
-    const isSpiked   = spikeRatio >= 3 && weeklyVel >= 5; // 3x+ above yearly AND meaningful volume
-
     const base       = w || m || y;
     const totalQty   = (m || y)?.qty || 1;
     const totalGross = (m || y)?.gross || 0;
 
     result[key] = {
       product: base.product, barcode: base.barcode, category: base.category,
-      weeklyVel, monthlyAvg, yearlyAvg, blended, isOneOff, spikeRatio, isSpiked,
+      weeklyVel, monthlyAvg, yearlyAvg, blended, isOneOff,
       sellPrice: Math.round((totalGross / totalQty) * 100) / 100,
     };
   });
@@ -93,30 +89,25 @@ function scoreMatch(promoName, promoRrp, eposProduct) {
   const eposWords  = ep.replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 1);
   const brand      = promoWords[0];
 
-  // Brand must match as first word — hard requirement
   if (!brand || eposWords[0] !== brand) return -999;
 
   let score = 0;
 
-  // PM code match
   if (pmCode && pmCode.length >= 2) {
-    if (ep.includes("pm" + pmCode))  score += 5;   // PM matches = strong signal
-    else if (/pm\d+/.test(ep))       score -= 4;   // Different PM = wrong product
+    if (ep.includes("pm" + pmCode))  score += 5;
+    else if (/pm\d+/.test(ep))       score -= 4;
   }
 
-  // Variant keywords
   const promoVariants = VARIANT_KEYWORDS.filter(kw => name.includes(kw));
   const eposVariants  = VARIANT_KEYWORDS.filter(kw => ep.includes(kw));
 
   for (const kw of promoVariants) {
-    if (ep.includes(kw)) score += 3;  // Variant matches
-    else                 score -= 5;  // Promo has variant, EPOS doesn't = wrong product
+    if (ep.includes(kw)) score += 3;
+    else                 score -= 5;
   }
 
-  // Promo has no variant but EPOS does = likely wrong
   if (promoVariants.length === 0 && eposVariants.length > 0) score -= 3;
 
-  // Meaningful word overlap (beyond brand)
   const meaningful = promoWords.slice(1).filter(w => w.length > 3 && !SKIP_WORDS.includes(w));
   for (const w of meaningful) {
     if (eposWords.some(ew => ew === w || ew.includes(w) || w.includes(ew))) score += 1;
@@ -144,7 +135,6 @@ function matchPromoToEpos(promoName, promoRrp, velMap) {
   const best   = scored[0];
   const second = scored[1];
 
-  // Confident: score >= 3 AND at least 3 points ahead of second place
   const confident = best.score >= 3 && (!second || best.score - second.score >= 3);
 
   return {
@@ -158,39 +148,26 @@ function matchPromoToEpos(promoName, promoRrp, velMap) {
 // PACK STRUCTURE VALIDATOR
 // ═══════════════════════════════════════════════════════════════════
 function parseUnitsPerCase(caseFormat, aiValue, productName) {
-  // Extract sellable units from a format string.
-  // KEY RULE: "6x4x440ml" = 6 sellable PACKS (you sell the 4-pack, not individual cans).
-  //           "24x440ml"  = 24 individual cans.
-  //           "12x500ml"  = 12 individual bottles.
-  // The OUTER number is always the sellable unit count.
   const extractFromString = (str) => {
     if (!str) return null;
     const s = str.trim();
-    // Triple format "6x4x568ml" or "6x4x440ml" → 6 sellable packs
     const multi = s.match(/^(\d+)x(\d+)x[\d.]+(?:ml|cl|ltr)/i);
     if (multi) return parseInt(multi[1]);
-    // Double format "24x440ml", "12x500ml", "6x75cl", "6x2ltr" → first number = units
     const single = s.match(/^(\d+)x[\d.]+(?:ml|cl|ltr)/i);
     if (single) return parseInt(single[1]);
-    // Plain volume "70cl", "1ltr" = single bottle
     if (/^[\d.]+(cl|ml|ltr)/i.test(s)) return 1;
     return null;
   };
 
-  // 1. Try case_format first — most reliable when AI fills it correctly
   const fromFormat = extractFromString(caseFormat);
   if (fromFormat !== null) return fromFormat;
 
-  // 2. Try extracting from product_name as fallback
-  // IMPORTANT: must match triple format BEFORE double to avoid "4x440ml"
-  // matching inside "6x4x440ml". The regex tries triple first.
   if (productName) {
     const tripleMatch = (productName || "").match(/(\d+x\d+x[\d.]+(?:ml|cl|ltr))/i);
     if (tripleMatch) {
       const fromTriple = extractFromString(tripleMatch[1]);
       if (fromTriple !== null) return fromTriple;
     }
-    // Only try double format if no triple was found
     const doubleMatch = (productName || "").match(/(\d+x[\d.]+(?:ml|cl|ltr))/i);
     if (doubleMatch) {
       const fromDouble = extractFromString(doubleMatch[1]);
@@ -198,7 +175,6 @@ function parseUnitsPerCase(caseFormat, aiValue, productName) {
     }
   }
 
-  // 3. AI fallback — sanity-capped
   const ai = Number(aiValue) || 1;
   if (ai >= 1 && ai <= 48) return ai;
 
@@ -221,17 +197,11 @@ function calculateDecisions(matchedProducts, budget) {
     const vel = epos ? epos.blended : 0;
     const cp  = Number(case_price) || 0;
     const upc = parseUnitsPerCase(case_format, Number(item.units_per_case) || 1, product_name);
-    // Use AI-parsed RRP first, fall back to EPOS average sell price if missing
-    const aiRrp   = Number(rrp_num) || 0;
-    const eposSp  = epos?.sellPrice || 0;
-    const rrp     = aiRrp > 0 ? aiRrp : eposSp;
-    const rrpSrc  = aiRrp > 0 ? "leaflet" : eposSp > 0 ? "EPOS" : "none";
+    const rrp = Number(rrp_num) || 0;
 
     const costPerUnitIncVat = (upc > 0 ? cp / upc : cp) * 1.2;
     const por = rrp > 0 ? Math.round(((rrp - costPerUnitIncVat) / rrp) * 1000) / 10 : 0;
-    const spikeRatio = epos?.spikeRatio || 0;
-    const isSpiked   = epos?.isSpiked || false;
-    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || (rrp > 0 ? `£${rrp.toFixed(2)}` : ""), rrpNum: rrp, upc, spikeRatio, isSpiked };
+    const baseFields = { product: product_name, eposMatch: eposMatch || "No match", source: item.source || "", casePrice: cp, por, rrp: item.rrp || "", rrpNum: rrp, upc };
 
     const isOneOff  = epos?.isOneOff || false;
     const yearlyAvg = epos?.yearlyAvg || 0;
@@ -286,34 +256,30 @@ function calculateDecisions(matchedProducts, budget) {
 
   const budgetNum = Number(budget) || 750;
 
-  // ── REBALANCE DOWN: over budget → cut spiked/inflated items first, then highest cover ──
+  // ── REBALANCE DOWN: over budget → reduce slowest movers ──
   if (totalSpend > budgetNum * 1.05) {
-    // Sort: spiked items first (highest spike ratio), then by cover descending (most overstocked)
-    // This protects proven fast movers and cuts seasonal spikes / overordered items first
-    const buyItems = decisions.filter(d => d.decision === "BUY" && d.qty > 1)
-      .sort((a, b) => {
-        // Spiked items always cut first
-        if (a.isSpiked !== b.isSpiked) return a.isSpiked ? -1 : 1;
-        // Among equals, cut highest cover first (most stock relative to velocity)
-        const aCover = a.vel > 0 ? (a.qty * a.upc) / a.vel : 999;
-        const bCover = b.vel > 0 ? (b.qty * b.upc) / b.vel : 999;
-        return bCover - aCover;
-      });
+    const buyItems = decisions.filter(d => d.decision === "BUY").sort((a, b) => a.vel - b.vel);
     let iterations = 0;
-    const MAX_ITER = 300;
+    const MAX_ITER = 200;
     while (totalSpend > budgetNum * 1.05 && buyItems.length > 0 && iterations < MAX_ITER) {
       iterations++;
-      const target = buyItems[0];
-      if (target.qty > 1) {
-        target.qty--;
-        target.units    = target.qty * target.upc;
-        target.totalInc = Math.round(target.casePrice * target.qty * 1.2 * 100) / 100;
-        target.cover    = `~${Math.round(target.units / target.vel)}wk`;
-        totalSpend      = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
+      const slowest = buyItems[0];
+      if (slowest.qty > 1) {
+        slowest.qty--;
+        slowest.units    = slowest.qty * slowest.upc;
+        slowest.totalInc = Math.round(slowest.casePrice * slowest.qty * 1.2 * 100) / 100;
+        slowest.cover    = `~${Math.round(slowest.units / slowest.vel)}wk`;
+        totalSpend       = decisions.reduce((s, d) => s + (d.totalInc || 0), 0);
       } else {
         buyItems.shift();
       }
     }
+    decisions.forEach(d => {
+      if (d.decision === "BUY") {
+        const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
+        if (d.qty < originalQty) d.notes += " [Qty reduced — budget]";
+      }
+    });
   }
 
   // ── REBALANCE UP: under budget → increase fastest movers ──
@@ -326,7 +292,7 @@ function calculateDecisions(matchedProducts, budget) {
         iterations++;
         if (totalSpend >= budgetNum * 0.95) break outerLoop;
         const newCover = ((fast.qty + 1) * fast.upc) / fast.vel;
-        if (newCover > COVER_MAX) break; // Hit cap for this item, move to next
+        if (newCover > COVER_MAX) break;
         fast.qty++;
         fast.units    = fast.qty * fast.upc;
         fast.totalInc = Math.round(fast.casePrice * fast.qty * 1.2 * 100) / 100;
@@ -336,22 +302,13 @@ function calculateDecisions(matchedProducts, budget) {
     }
   }
 
-  // ── REBUILD NOTES: after all rebalancing, update notes to reflect final quantities ──
-  decisions.forEach(d => {
-    if (d.decision === "BUY" && d.vel > 0) {
-      const originalQty = Math.ceil((d.vel * (d.vel >= FAST_VEL ? 8 : d.vel >= 4 ? 6 : 4)) / d.upc);
-      const reduced = d.qty < originalQty ? " [Qty reduced — budget]" : "";
-      const spike   = d.isSpiked ? ` ⚠️ SPIKE: ${d.spikeRatio}x above yearly avg — review qty.` : "";
-      d.notes = `${d.vel}/wk blended. ${d.qty} case${d.qty > 1 ? "s" : ""} × ${d.upc} = ${d.units} units = ${d.cover}. ${d.por}% POR.${reduced}${spike}`;
-    }
-  });
-
   const estRevenue = decisions.reduce((s, d) => s + ((d.rrpNum || 0) * (d.units || 0)), 0);
   const estProfit  = Math.round((estRevenue - totalSpend) * 100) / 100;
-  // ROI = profit / spend × 100 (return on investment)
-  const roi = totalSpend > 0
-    ? Math.round((estProfit / totalSpend) * 1000) / 10
-    : 0;
+  const roi = estRevenue > 0
+    ? Math.round((estProfit / estRevenue) * 1000) / 10
+    : totalSpend > 0
+      ? Math.round((estProfit / totalSpend) * 1000) / 10
+      : 0;
 
   return {
     decisions, skips,
@@ -422,7 +379,6 @@ function PromoRow({ item, onEdit, priceHistory }) {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: C.white, fontWeight: 600 }}>{item.product}</div>
           <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{item.vel != null ? `${item.vel}/wk` : "—"} · {item.por != null ? `${Math.round(Number(item.por))}% POR` : "—"}</div>
-          {item.isSpiked && <div style={{ fontSize: 10, marginTop: 2, color: "#F59E0B", fontWeight: 600 }}>⚠️ {item.spikeRatio}x above yearly avg — possible seasonal spike</div>}
           {item.eposMatch && item.eposMatch !== "No match" && <div style={{ fontSize: 10, color: C.accentLight, marginTop: 1 }}>EPOS: {item.eposMatch}</div>}
           {chg != null && chg !== 0 && <div style={{ fontSize: 10, marginTop: 2, color: chg < 0 ? C.greenText : C.redText, fontWeight: 600 }}>{chg < 0 ? `£${Math.abs(chg).toFixed(2)} CHEAPER` : `£${chg.toFixed(2)} DEARER`} vs last promo</div>}
         </div>
@@ -446,13 +402,13 @@ function PromoRow({ item, onEdit, priceHistory }) {
             <div style={{ background: "rgba(0,0,0,0.15)", borderRadius: 8, padding: 10, marginTop: 6 }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
                 {["BUY", "TEST", "SKIP"].map(d => (
-                  <button key={d} onClick={() => setNewDec(d)} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: newDec === d ? (d === "BUY" ? C.green : d === "TEST" ? "#F39C12" : C.red) : C.surface, color: newDec === d ? C.white : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{d}</button>
+                  <button key={d} onClick={() => setNewDec(d)} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: newDec === d ? (d === "BUY" ? C.green : d === "TEST" ? "#F39C12" : C.red) : C.surface, color: newDec === d ? C.white : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{d}</button>
                 ))}
               </div>
-              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for change..." style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, minHeight: 50, outline: "none", resize: "vertical", fontFamily: "Inter, sans-serif", boxSizing: "border-box" }} />
-              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <button onClick={() => setEditing(false)} style={{ flex: 1, padding: 8, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Cancel</button>
-                <button onClick={() => { if (onEdit) onEdit(item, newDec, notes); setEditing(false); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Save</button>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for change (optional)..." style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, resize: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8 }} rows={2} />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => { onEdit(item, newDec, notes); setEditing(false); }} style={{ flex: 1, padding: 8, borderRadius: 8, border: "none", background: C.accentLight, color: C.white, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Save</button>
+                <button onClick={() => setEditing(false)} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Cancel</button>
               </div>
             </div>
           )}
@@ -463,112 +419,71 @@ function PromoRow({ item, onEdit, priceHistory }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// UI — AMBIGUITY REVIEW SCREEN
-// Shows products JS couldn't confidently match. User picks correct
-// EPOS line from a scored shortlist, then calculation runs.
+// REVIEW ITEM — single ambiguous product picker
 // ═══════════════════════════════════════════════════════════════════
-// Per-item sub-component so each search field has isolated state
 function ReviewItem({ item, index, selection, onPick, velMap }) {
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery]           = useState("");
+  const [search, setSearch]   = useState("");
+  const [showSearch, setShowSearch] = useState(false);
 
-  // Live search against velMap as user types
   const searchResults = useMemo(() => {
-    const q = query.toLowerCase().trim();
-    if (q.length < 2) return [];
-    return Object.values(velMap)
-      .filter(v => v.product.toLowerCase().includes(q))
-      .sort((a, b) => b.blended - a.blended)
-      .slice(0, 8);
-  }, [query, velMap]);
-
-  const isTypedSelection = selection && !item.candidates.some(c => c.epos === selection);
+    if (!search || search.length < 2) return [];
+    const q = search.toLowerCase();
+    return Object.values(velMap).filter(v => v.product.toLowerCase().includes(q)).slice(0, 6);
+  }, [search, velMap]);
 
   return (
-    <div style={{ marginBottom: 20, padding: 14, borderRadius: 12, background: C.surface, border: `1px solid ${selection !== undefined ? "rgba(34,197,94,0.3)" : C.border}` }}>
-
-      {/* Leaflet product header */}
-      <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>On leaflet</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>{item.product_name}</div>
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>
-          {item.case_format} · {item.rrp} · Case £{Number(item.case_price).toFixed(2)} ex VAT
-        </div>
+    <div style={{ marginBottom: 16, padding: 12, background: C.surface, borderRadius: 10, border: `1px solid ${selection !== undefined ? (selection ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)") : C.border}` }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.white, marginBottom: 4 }}>{item.product_name}</div>
+      <div style={{ fontSize: 10, color: C.textMuted, marginBottom: 10 }}>
+        {item.case_format} · WSP £{Number(item.case_price || 0).toFixed(2)} · RRP {item.rrp}
       </div>
 
-      <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Which EPOS product is this?</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-
-        {/* Scored candidates */}
-        {item.candidates.map(({ epos, score }, j) => {
-          const isSelected = selection === epos;
-          const strength   = score >= 5 ? "Strong" : score >= 3 ? "Good" : score >= 0 ? "Weak" : "Poor";
-          const strColor   = score >= 5 ? C.greenText : score >= 3 ? C.orangeText : C.textMuted;
-          return (
-            <button key={j} onClick={() => { onPick(epos); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${isSelected ? "rgba(34,197,94,0.6)" : C.border}`, background: isSelected ? "rgba(34,197,94,0.1)" : C.bg, cursor: "pointer", textAlign: "left" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{epos.product}</div>
-                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{epos.weeklyVel}/wk (7d) · {epos.monthlyAvg}/wk (mo) · {epos.yearlyAvg}/wk (yr)</div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-                <div style={{ fontSize: 10, color: strColor, fontWeight: 600 }}>{strength}</div>
-                {isSelected && <div style={{ width: 18, height: 18, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: C.white }}>✓</div>}
-              </div>
-            </button>
-          );
-        })}
-
-        {/* Typed search option */}
-        {!searchOpen ? (
-          <button onClick={() => setSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${isTypedSelection ? "rgba(34,197,94,0.6)" : C.border}`, background: isTypedSelection ? "rgba(34,197,94,0.1)" : C.bg, cursor: "pointer" }}>
-            <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${isTypedSelection ? C.green : C.border}`, background: isTypedSelection ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
-              {isTypedSelection ? "✓" : "+"}
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: isTypedSelection ? C.greenText : C.textMuted }}>
-                {isTypedSelection ? selection.product : "Search EPOS manually"}
-              </div>
-              {isTypedSelection && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>{selection.weeklyVel}/wk (7d) · {selection.monthlyAvg}/wk (mo) · {selection.yearlyAvg}/wk (yr)</div>}
-              {!isTypedSelection && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Not in suggestions? Type to search all EPOS products</div>}
-            </div>
-          </button>
-        ) : (
-          <div style={{ padding: 10, borderRadius: 9, border: `1.5px solid ${C.accentLight}`, background: "rgba(59,111,212,0.06)" }}>
-            <input
-              autoFocus
-              type="text"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Type product name e.g. Smirnoff Ice..."
-              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 12, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8 }}
-            />
-            {query.length >= 2 && searchResults.length === 0 && (
-              <div style={{ fontSize: 11, color: C.textMuted, padding: "6px 4px" }}>No EPOS products found for "{query}"</div>
-            )}
-            {searchResults.map((epos, k) => (
-              <button key={k} onClick={() => { onPick(epos); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "9px 10px", marginBottom: 4, borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", textAlign: "left" }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: C.white }}>{epos.product}</div>
-                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>{epos.weeklyVel}/wk (7d) · {epos.monthlyAvg}/wk (mo) · {epos.yearlyAvg}/wk (yr)</div>
+      {/* Candidates */}
+      {item.candidates?.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", marginBottom: 6 }}>Possible matches</div>
+          {item.candidates.map((c, i) => {
+            const vel = c.epos?.blended || 0;
+            return (
+              <button key={i} onClick={() => onPick(c.epos)} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", marginBottom: 4, borderRadius: 8, border: `1px solid ${selection?.product === c.epos.product ? "rgba(34,197,94,0.5)" : C.border}`, background: selection?.product === c.epos.product ? C.greenDim : C.card, cursor: "pointer" }}>
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 11, color: C.white, fontWeight: 600 }}>{c.epos.product}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted }}>{vel}/wk blended</div>
                 </div>
-                <div style={{ fontSize: 10, color: C.accentLight, fontWeight: 600, marginLeft: 8, flexShrink: 0 }}>Select</div>
+                <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${selection?.product === c.epos.product ? C.green : C.border}`, background: selection?.product === c.epos.product ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
+                  {selection?.product === c.epos.product ? "✓" : ""}
+                </div>
               </button>
-            ))}
-            <button onClick={() => { setSearchOpen(false); setQuery(""); }} style={{ fontSize: 11, color: C.textMuted, background: "none", border: "none", cursor: "pointer", padding: "4px 0" }}>Cancel</button>
-          </div>
-        )}
+            );
+          })}
+        </div>
+      )}
 
-        {/* Not in EPOS option */}
-        <button onClick={() => { onPick(null); setSearchOpen(false); setQuery(""); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: `1.5px solid ${selection === null ? "rgba(239,68,68,0.5)" : C.border}`, background: selection === null ? "rgba(239,68,68,0.08)" : C.bg, cursor: "pointer" }}>
-          <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${selection === null ? C.red : C.border}`, background: selection === null ? C.red : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
-            {selection === null ? "✓" : ""}
-          </div>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: selection === null ? C.redText : C.textMuted }}>Not in EPOS</div>
-            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Treat as new product — TEST 1 case if POR is good</div>
-          </div>
-        </button>
-      </div>
+      {/* Manual search */}
+      {!showSearch ? (
+        <button onClick={() => setShowSearch(true)} style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.textMuted, fontSize: 10, fontWeight: 600, cursor: "pointer", marginBottom: 8 }}>🔍 Search manually</button>
+      ) : (
+        <div style={{ marginBottom: 8 }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Type product name..." style={{ width: "100%", padding: "8px 10px", borderRadius: 8, background: C.card, color: C.white, border: `1px solid ${C.border}`, fontSize: 11, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 4 }} autoFocus />
+          {searchResults.map((v, i) => (
+            <button key={i} onClick={() => { onPick(v); setShowSearch(false); setSearch(""); }} style={{ width: "100%", display: "flex", justifyContent: "space-between", padding: "7px 10px", marginBottom: 3, borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, cursor: "pointer" }}>
+              <span style={{ fontSize: 11, color: C.white }}>{v.product}</span>
+              <span style={{ fontSize: 10, color: C.textMuted }}>{v.blended}/wk</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Not in EPOS option */}
+      <button onClick={() => onPick(null)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, border: `1px solid ${selection === null ? "rgba(239,68,68,0.5)" : C.border}`, background: selection === null ? "rgba(239,68,68,0.08)" : C.bg, cursor: "pointer" }}>
+        <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${selection === null ? C.red : C.border}`, background: selection === null ? C.red : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.white, flexShrink: 0 }}>
+          {selection === null ? "✓" : ""}
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: selection === null ? C.redText : C.textMuted }}>Not in EPOS</div>
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Treat as new product — TEST 1 case if POR is good</div>
+        </div>
+      </button>
     </div>
   );
 }
@@ -635,7 +550,6 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
   const [selSkips, setSelSkips]   = useState([]);
   const [saving, setSaving]       = useState(false);
 
-  // State for the review flow
   const [pendingConfident, setPendingConfident] = useState(null);
   const [pendingAmbiguous, setPendingAmbiguous] = useState(null);
 
@@ -706,19 +620,14 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         const { match, candidates, confident: isConfident } = matchPromoToEpos(prod.product_name, prod.rrp, velMap);
         const rrpNum = (() => {
           const raw = (prod.rrp || "").toString().trim();
-          // Try direct float parse after stripping currency symbols and PM/RRP prefix
-          // Handles: "PM£1.40", "PM 1.40", "£1.40", "RRP£1.99", "1.40", "PM140"
           const cleaned = raw.replace(/[£$€\s]/g, "").replace(/^(PM|RRP|pm|rrp)/i, "");
-          // If it has a decimal point, parse directly: "1.40" → 1.40
           if (cleaned.includes(".")) return parseFloat(cleaned) || 0;
-          // No decimal — could be "140" meaning £1.40, or "699" meaning £6.99
-          // Heuristic: if number > 99, it's pence notation (divide by 100)
           const n = parseFloat(cleaned) || 0;
           if (n === 0) return 0;
           if (n > 99) return Math.round(n) / 100;
           return n;
         })();
-        const base   = { ...prod, rrp_num: rrpNum, source: supplier };
+        const base = { ...prod, rrp_num: rrpNum, source: supplier };
 
         if (isConfident) {
           confident.push({ ...base, epos: match, eposMatch: match.product });
@@ -744,7 +653,6 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
     }
   };
 
-  // ── After review, merge user selections and calculate ────────────
   const onReviewConfirm = (selections) => {
     const resolved = pendingAmbiguous.map((item, i) => ({
       ...item,
@@ -777,7 +685,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
 
   const editDec = async (item, dec, notes) => {
     if (item.id) {
-      await updatePromoDecision(item.id, { user_override: dec, user_notes: notes });
+      await updatePromoDecision(item.id, { user_override: dec, user_notes: notes }, clientId);
       if (notes) await saveCorrection(clientId, item.product, "override", `${dec}: ${notes}`);
       setSelDecs(p => p.map(d => d.id === item.id ? { ...d, user_override: dec, user_notes: notes } : d));
     } else {
@@ -788,14 +696,14 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
 
   const viewHist = async (s) => {
     setSelScan(s);
-    const [d, k] = await Promise.all([loadPromoDecisions(s.id), loadPromoSkips(s.id)]);
+    const [d, k] = await Promise.all([loadPromoDecisions(s.id, clientId), loadPromoSkips(s.id, clientId)]);
     setSelDecs(d || []); setSelSkips(k || []);
     setView("detail");
   };
 
   const delScan = async (id) => {
     if (!confirm("Delete this scan?")) return;
-    await deletePromoScan(id);
+    await deletePromoScan(id, clientId);
     setHistory(p => p.filter(s => s.id !== id));
     setView("menu");
   };
@@ -836,37 +744,26 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         {QUICK_SUPPLIERS.map(s => <button key={s} onClick={() => setSupplier(s)} style={{ padding: "6px 10px", borderRadius: 8, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", background: supplier === s ? C.accentLight : C.surface, color: supplier === s ? C.white : C.textMuted }}>{s}</button>)}
       </div>
 
-      <label style={{ display: "block", padding: "24px 16px", borderRadius: 12, border: `2px dashed ${C.border}`, background: C.surface, textAlign: "center", cursor: "pointer", marginBottom: 12 }}>
-        <input type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
-        <div style={{ fontSize: 28, marginBottom: 8 }}>📷</div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>Take photo or choose from library</div>
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Multiple photos supported</div>
-      </label>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 6 }}>Budget (£)</div>
+      <input type="number" value={budget} onChange={e => setBudget(e.target.value)} placeholder="750" style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 14 }} />
 
       {previews.length > 0 && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
           {previews.map((p, i) => (
-            <div key={i} style={{ position: "relative", width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
-              <img src={p} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="" />
-              <button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>x</button>
+            <div key={i} style={{ position: "relative" }}>
+              <img src={p} style={{ width: 72, height: 72, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.border}` }} />
+              <button onClick={() => rmPhoto(i)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: C.red, border: "none", color: C.white, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
             </div>
           ))}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Budget:</span>
-        <div style={{ display: "flex", alignItems: "center", flex: 1, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, padding: "0 12px" }}>
-          <span style={{ color: C.textMuted }}>£</span>
-          <input type="tel" value={budget} onChange={e => setBudget(e.target.value.replace(/\D/g, ""))} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "none", color: C.white, fontSize: 14, fontWeight: 700, outline: "none" }} />
-        </div>
-      </div>
+      <label style={{ display: "block", width: "100%", padding: "12px", borderRadius: 10, border: `1px dashed ${C.border}`, background: C.card, color: C.textMuted, fontSize: 13, textAlign: "center", cursor: "pointer", marginBottom: 14, boxSizing: "border-box" }}>
+        + Add Photo{photos.length > 0 ? "s" : ""}
+        <input type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
+      </label>
 
-      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
-        {Object.keys(velMap).length} products in EPOS · {(allDays || []).length} days of data
-      </div>
-
-      {error && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.redDim, marginBottom: 12, fontSize: 12, color: C.redText }}>{error}</div>}
+      {error && <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, background: C.redDim, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: C.redText }}>{error}</div>}
 
       <button onClick={scan} disabled={scanning || !photos.length || !supplier.trim()} style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none", background: photos.length && supplier.trim() ? C.green : C.surface, color: photos.length && supplier.trim() ? C.white : C.textMuted, fontSize: 15, fontWeight: 700, cursor: "pointer", opacity: scanning ? 0.7 : 1 }}>
         {scanning ? `${scanStep}` : photos.length && supplier.trim() ? `Scan ${photos.length} Photo${photos.length !== 1 ? "s" : ""}` : !supplier.trim() ? "Enter supplier name" : "Upload a photo"}
@@ -901,7 +798,7 @@ export default function LeafletScanner({ analysis, clientId, allDays }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <Mini label="Budget" value={fi(result.budget || budget)} />
           <Mini label="Spent"  value={fi(result.totalSpend || 0)} />
-          <Mini label="ROI" value={`${result.roi || 0}%`} color={result.roi > 0 ? C.greenText : C.redText} />
+          <Mini label="Margin" value={`${result.roi || 0}%`} color={result.roi > 0 ? C.greenText : C.redText} />
           <Mini label="Lines"  value={`${b.length}B / ${t.length}T`} />
         </div>
         {result.source && <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 12 }}>{result.source}</div>}
