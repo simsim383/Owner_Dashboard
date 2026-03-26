@@ -315,6 +315,23 @@ function AuthScreen({ onAuthenticated }) {
   );
 }
 
+// ─── OFFLINE CACHE HELPER ───────────────────────────────────────
+// Only caches today, last 7 days, and current month to keep storage small
+function cacheForOffline(clientId, allDays) {
+  try {
+    const today = new Date();
+    const currentMonthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    const cutoff7 = new Date(today); cutoff7.setDate(cutoff7.getDate() - 6);
+    const cutoffStr = cutoff7.toISOString().split("T")[0];
+    const toCache = allDays.filter(d => {
+      const ds = d.dates?.start;
+      if (!ds) return false;
+      return ds >= cutoffStr || ds.startsWith(currentMonthKey);
+    });
+    localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(toCache));
+  } catch (e) { /* storage full */ }
+}
+
 export default function App() {
   const [allDays, setAllDays] = useState([]);
   const [activeSection, setActiveSection] = useState("dashboard");
@@ -326,6 +343,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [authenticated, setAuthenticated] = useState(false);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const on  = () => setIsOffline(false);
+    const off = () => setIsOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
 
   // Called by AuthScreen when login/setup succeeds
   const handleAuthenticated = async (cId, cName) => {
@@ -338,9 +364,8 @@ export default function App() {
         if (cached) {
           const days = JSON.parse(cached);
           setAllDays(days);
-          setSbStatus(`Offline — ${days.length} days cached`);
+          setSbStatus(`Offline — limited view`);
         } else {
-          // No cache yet — show empty dashboard with message rather than upload screen
           const placeholder = [{ uploadId: "offline", items: [], dates: { start: new Date().toISOString().split("T")[0], end: new Date().toISOString().split("T")[0] }, isEstimated: true, uploadType: "day", transactions: null, avgBasket: null }];
           setAllDays(placeholder);
           setSbStatus("Offline — connect to load your data");
@@ -360,12 +385,7 @@ export default function App() {
       const days = await loadFromSupabase(cId);
       if (days.length > 0) {
         setAllDays(days);
-        // Try to cache — may fail silently if storage is full
-        try {
-          // Only cache last 30 days to keep size manageable
-          const recent = days.slice(-30);
-          localStorage.setItem(`shopmate_data_${cId}`, JSON.stringify(recent));
-        } catch (e) { /* storage full — offline mode won't have cache */ }
+        cacheForOffline(cId, days);
       }
       setSbStatus(days.length > 0 ? `${days.length} days loaded` : "Ready");
     } catch (e) { setSbStatus("Error: " + e.message); }
@@ -387,7 +407,7 @@ export default function App() {
         setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
         const days = await loadFromSupabase(clientId);
         setAllDays(days);
-        try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days.slice(-30))); } catch (e) { /* storage full */ }
+        try { cacheForOffline(clientId, days); } catch (e) { /* storage full */ }
       } else { setSbStatus(`✗ ${result.error}`); }
       setTimeout(() => setSbStatus(""), 4000);
     } else {
@@ -403,7 +423,7 @@ export default function App() {
     if (clientId) {
       const days = await loadFromSupabase(clientId);
       setAllDays(days);
-      try { localStorage.setItem(`shopmate_data_${clientId}`, JSON.stringify(days.slice(-30))); } catch (e) { /* storage full */ }
+      cacheForOffline(clientId, days);
     }
   }, [clientId]);
 
@@ -569,7 +589,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Time toggle */}
+        {/* Time toggle — all 3 tabs always shown, but note if offline */}
         <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
           {timeRanges.map(tr => (
             <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
@@ -577,9 +597,10 @@ export default function App() {
             </button>
           ))}
         </div>
+        {isOffline && <div style={{ fontSize: 11, color: C.orangeText, marginBottom: 8, padding: "6px 10px", background: C.orangeDim, borderRadius: 8 }}>📵 Offline — showing day, week & current month only</div>}
 
-        {/* Month selector */}
-        {isMonth && availableMonths.length > 0 && (
+        {/* Month selector — hidden when offline */}
+        {isMonth && !isOffline && availableMonths.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <select value={selectedMonth || currentMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
               {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
