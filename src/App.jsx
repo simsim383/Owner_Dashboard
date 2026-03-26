@@ -365,6 +365,12 @@ export default function App() {
     return Object.values(months).sort((a, b) => b.key.localeCompare(a.key));
   }, [allDays]);
 
+  const currentMonthKey = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  // Previous complete month key (for comparison only)
   const prevMonthKey = useMemo(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -376,11 +382,21 @@ export default function App() {
       if (viewOverrideDay) { const found = allDays.find(d => d.dates?.start === viewOverrideDay); return found ? [found] : [allDays[allDays.length - 1]]; }
       return [allDays[allDays.length - 1]];
     }
-    if (timeRange === "week") return allDays.slice(-7);
-    const mKey = selectedMonth || prevMonthKey;
+    if (timeRange === "week") {
+      // Last 7 calendar days by date, not last 7 records
+      const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+      const latest = sorted[sorted.length - 1]?.dates?.start;
+      if (!latest) return sorted.slice(-7);
+      const cutoff = new Date(latest + "T12:00:00");
+      cutoff.setDate(cutoff.getDate() - 6);
+      const cutoffStr = cutoff.toISOString().split("T")[0];
+      return sorted.filter(d => d.dates?.start >= cutoffStr);
+    }
+    // Month: use selected month or CURRENT month
+    const mKey = selectedMonth || currentMonthKey;
     const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
     return monthDays.length > 0 ? monthDays : allDays;
-  }, [allDays, timeRange, selectedMonth, prevMonthKey, viewOverrideDay]);
+  }, [allDays, timeRange, selectedMonth, currentMonthKey, viewOverrideDay]);
 
   const currentData = useMemo(() => {
     if (!currentDays.length) return null;
@@ -392,9 +408,8 @@ export default function App() {
     if (!allDays.length) return null;
     if (timeRange === "day") return allDays.length >= 2 ? [allDays[allDays.length - 2]] : null;
     if (timeRange === "month") {
-      const currentMonthKey = currentDays[0]?.dates?.start?.slice(0, 7);
-      if (!currentMonthKey) return null;
-      const d = new Date(currentMonthKey + "-15");
+      const activeMonthKey = selectedMonth || currentMonthKey;
+      const d = new Date(activeMonthKey + "-15");
       d.setMonth(d.getMonth() - 1);
       const prevKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const prevDays = allDays.filter(day => day.dates?.start?.startsWith(prevKey));
@@ -500,7 +515,7 @@ export default function App() {
         {/* Month selector */}
         {isMonth && availableMonths.length > 0 && (
           <div style={{ marginBottom: 12 }}>
-            <select value={selectedMonth || prevMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
+            <select value={selectedMonth || currentMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
               {availableMonths.map(m => <option key={m.key} value={m.key} style={{ background: C.bg, color: C.white }}>{m.label} ({m.days.length} days)</option>)}
             </select>
           </div>
@@ -553,7 +568,7 @@ export default function App() {
       {selectedProduct && (
         <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "flex-end", maxWidth: 480, margin: "0 auto" }} onClick={() => setSelectedProduct(null)}>
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxHeight: "80vh", overflowY: "auto", borderRadius: "20px 20px 0 0", background: C.bg, padding: 20 }}>
-            <ProductDetail product={selectedProduct} onClose={() => setSelectedProduct(null)} />
+            <ProductDetail product={selectedProduct} onClose={() => setSelectedProduct(null)} allDays={allDays} currentDays={currentDays} timeRange={rangeLabel} />
           </div>
         </div>
       )}
