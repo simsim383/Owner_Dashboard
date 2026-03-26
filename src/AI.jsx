@@ -155,19 +155,54 @@ function fmtDays(n) { return n === 0 ? "TODAY" : n === 1 ? "Tomorrow" : `${n} da
 function fmtDate(s) { return new Date(s + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); }
 
 // ─── COMING UP ──────────────────────────────────────────────────
+// ─── COMING UP CACHE HELPERS ────────────────────────────────────
+function getComingUpCache() {
+  try {
+    const raw = localStorage.getItem("ri_comingup_cache");
+    if (!raw) return null;
+    const { ts, impacts } = JSON.parse(raw);
+    // Valid for 7 days
+    if (Date.now() - ts > 7 * 24 * 60 * 60 * 1000) return null;
+    return { impacts, ts };
+  } catch { return null; }
+}
+function setComingUpCache(impacts) {
+  try { localStorage.setItem("ri_comingup_cache", JSON.stringify({ ts: Date.now(), impacts })); } catch {}
+}
+function comingUpLastRefreshed() {
+  try {
+    const raw = localStorage.getItem("ri_comingup_cache");
+    if (!raw) return null;
+    const { ts } = JSON.parse(raw);
+    return new Date(ts);
+  } catch { return null; }
+}
+
 export function ComingUpSection() {
-  const [tick, setTick] = useState(0);
   const [impacts, setImpacts] = useState({});
   const [loadingImpacts, setLoadingImpacts] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(comingUpLastRefreshed());
 
-  const events = useMemo(() => getUpcoming(), [tick]);
+  const events = useMemo(() => getUpcoming(), []);
+
+  // Load from cache on mount
+  useEffect(() => {
+    const cached = getComingUpCache();
+    if (cached) setImpacts(cached.impacts);
+  }, []);
+
+  // Can only refresh once per week
+  const canRefresh = !lastRefresh || (Date.now() - lastRefresh.getTime() > 7 * 24 * 60 * 60 * 1000);
+  const refreshLabel = lastRefresh
+    ? `Updated ${Math.floor((Date.now() - lastRefresh.getTime()) / 86400000)}d ago`
+    : "Not yet loaded";
 
   const generateImpacts = useCallback(async () => {
-    if (!ANTHROPIC_KEY || events.length === 0) return;
+    if (!ANTHROPIC_KEY || events.length === 0 || !canRefresh) return;
     setLoadingImpacts(true);
     try {
       const list = events.map(e => `- ${e.event} (${fmtDate(e.date)}, ${fmtDays(e.daysAway)}): ${e.rawImpact}`).join("\n");
-      const prompt = `You are a stock advisor for a UK Londis convenience store in County Durham (working class area, loyal regulars).
+      const prompt = `You are a stock advisor for a UK convenience store.
 
 For each upcoming event, write ONE punchy sentence (max 12 words) of the most important specific stock advice.
 
@@ -184,18 +219,28 @@ Respond ONLY with a JSON object: {"event name": "stock advice", ...}. No markdow
       const data = await res.json();
       const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
       const clean = text.replace(/```json|```/g, "").trim();
-      try { setImpacts(JSON.parse(clean)); } catch { /* use rawImpact fallback */ }
+      try {
+        const parsed = JSON.parse(clean);
+        setImpacts(parsed);
+        setComingUpCache(parsed);
+        setLastRefresh(new Date());
+      } catch { /* use rawImpact fallback */ }
     } catch (e) { console.error("Coming Up impacts:", e); }
     setLoadingImpacts(false);
-  }, [events]);
-
-  useEffect(() => { generateImpacts(); }, [tick]);
+  }, [events, canRefresh]);
 
   return (
     <SectionCard title="Coming Up" icon="📅">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontSize: 12, color: C.textMuted }}>Next events · refresh to update days</div>
-        <button onClick={() => setTick(t => t + 1)} style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>↻ Refresh</button>
+        <div style={{ fontSize: 12, color: C.textMuted }}>{refreshLabel} · refreshes weekly</div>
+        <button
+          onClick={generateImpacts}
+          disabled={!canRefresh || loadingImpacts}
+          style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: canRefresh ? C.textMuted : C.textMuted, fontSize: 11, fontWeight: 600, cursor: canRefresh && !loadingImpacts ? "pointer" : "default", opacity: canRefresh && !loadingImpacts ? 1 : 0.4 }}
+          title={canRefresh ? "Refresh AI stock advice" : "Already refreshed this week"}
+        >
+          {loadingImpacts ? "..." : canRefresh ? "↻ Refresh" : "✓ This week"}
+        </button>
       </div>
       {events.length === 0 && <EmptyState msg="No upcoming events in the next 60 days" />}
       {events.map((e, i) => {
@@ -401,7 +446,7 @@ export function NewsSection() {
 
 const TRENDS_CACHE_KEY = "shopmate_trends_cache_v2";
 const TRENDS_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const MAX_REFRESHES_PER_DAY = 3;
+const MAX_REFRESHES_PER_DAY = 1;
 
 function getTrendsCache() {
   try {
@@ -542,15 +587,18 @@ Be specific and include niche/novelty items — do NOT just list mainstream prod
 
 Return 8-10 trends. For each, provide:
 - product: The specific product name (e.g. "Mochi Squishy Dumpling Toys", "Labubu blind boxes", "Prime Hydration")
-- category: Short category tag (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬", "Toys 🧸", "Cards 🃏")
+- category: Short category tag with emoji (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬", "Toys 🧸", "Cards 🃏")
 - why: 1-2 sentences on WHY it's trending and what the social media buzz is about
 - heat: One of exactly: "🔥 Viral now", "📈 Building", "👀 Watch this"
 - stock: One of exactly: "YES", "MAYBE", "NICHE"
 - recommendation: 1-2 sentences on whether a UK corner shop should stock it, who is buying it, and the profit opportunity
-- source: Where to get it — be specific e.g. "Booker, Costco", "Amazon wholesale", "Pop Mart UK", "Specialist importer — check eBay wholesale"
+- source: Where to get it — e.g. "Booker, Costco", "Amazon wholesale", "Pop Mart UK", "Specialist importer"
 - examples: 2-3 specific product variants if known
 
 Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.`;
+
+    // Small delay to avoid rate limit collision with other API calls on app load
+    await new Promise(r => setTimeout(r, 1500));
 
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -558,17 +606,16 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 2000,
-          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "GB", region: "England", timezone: "Europe/London" } }],
           messages: [{ role: "user", content: prompt }],
         }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `API ${res.status}`);
+        throw new Error(errData?.error?.message || `API error ${res.status}`);
       }
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
-      // Extract text from all content blocks (web search returns mixed blocks)
       const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("") || "";
       const clean = text.replace(/```json|```/g, "").trim();
       const j1 = clean.indexOf("["); const j2 = clean.lastIndexOf("]");
@@ -599,8 +646,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
           <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
         </div>
-        <button onClick={fetchTrends} disabled={loading || !canRefresh} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: canRefresh ? "#64748b" : "#334155", fontSize: 11, fontWeight: 600, cursor: (loading || !canRefresh) ? "default" : "pointer", opacity: (loading || !canRefresh) ? 0.5 : 1 }} title={canRefresh ? `${refreshesLeft} refresh${refreshesLeft !== 1 ? "es" : ""} left today` : "No refreshes left today — resets tomorrow"}>
-          {loading ? "..." : !canRefresh ? "✓ Limit reached" : `↻ Refresh (${refreshesLeft} left)`}
+        <button onClick={fetchTrends} disabled={loading || !canRefresh} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: canRefresh ? "#64748b" : "#334155", fontSize: 11, fontWeight: 600, cursor: (loading || !canRefresh) ? "default" : "pointer", opacity: (loading || !canRefresh) ? 0.5 : 1 }} title={canRefresh ? "Refresh trends once per day" : "Already refreshed today — resets tomorrow"}>
+          {loading ? "Searching..." : !canRefresh ? "✓ Done today" : "↻ Refresh"}
         </button>
       </div>
 
@@ -828,6 +875,19 @@ async function loadClientLocation(clientId) {
 }
 
 // ─── WEATHER SECTION COMPONENT ──────────────────────────────────
+function getWeatherCache(clientId) {
+  try {
+    const raw = localStorage.getItem(`ri_weather_${clientId}`);
+    if (!raw) return null;
+    const { ts, forecast } = JSON.parse(raw);
+    if (Date.now() - ts > 24 * 60 * 60 * 1000) return null;
+    return { forecast, ts };
+  } catch { return null; }
+}
+function setWeatherCache(clientId, forecast) {
+  try { localStorage.setItem(`ri_weather_${clientId}`, JSON.stringify({ ts: Date.now(), forecast })); } catch {}
+}
+
 export function WeatherSection({ clientId, analysis }) {
   const [location, setLocation]       = useState(null);
   const [forecast, setForecast]       = useState(null);
@@ -840,24 +900,34 @@ export function WeatherSection({ clientId, analysis }) {
   const [aiPlan, setAiPlan]           = useState(null);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [expandedDay, setExpandedDay] = useState(null);
+  const [lastFetched, setLastFetched] = useState(null);
+
+  const canRefreshWeather = !lastFetched || (Date.now() - lastFetched > 24 * 60 * 60 * 1000);
 
   // Load saved location on mount
   useEffect(() => {
     if (!clientId) { setLoadingLoc(false); return; }
     (async () => {
       try {
-        // Check localStorage first for speed
+        // Check forecast cache first
+        const weatherCached = getWeatherCache(clientId);
+        if (weatherCached) {
+          setForecast(weatherCached.forecast);
+          setLastFetched(weatherCached.ts);
+        }
+        // Check location cache
         const cached = localStorage.getItem(`weather_loc_${clientId}`);
         if (cached) {
           const loc = JSON.parse(cached);
           setLocation(loc);
-          loadWeather(loc.lat, loc.lon);
+          // Only fetch fresh forecast if no cache
+          if (!weatherCached) loadWeather(loc.lat, loc.lon, clientId);
         } else {
           const loc = await loadClientLocation(clientId);
           if (loc) {
             setLocation(loc);
             localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
-            loadWeather(loc.lat, loc.lon);
+            if (!weatherCached) loadWeather(loc.lat, loc.lon, clientId);
           }
         }
       } catch (e) { console.error("Load location:", e); }
@@ -865,11 +935,13 @@ export function WeatherSection({ clientId, analysis }) {
     })();
   }, [clientId]);
 
-  const loadWeather = async (lat, lon) => {
+  const loadWeather = async (lat, lon, cId) => {
     setLoadingFc(true);
     try {
       const fc = await fetchForecast(lat, lon);
       setForecast(fc);
+      setWeatherCache(cId || clientId, fc);
+      setLastFetched(Date.now());
     } catch (e) { console.error("Forecast:", e); }
     setLoadingFc(false);
   };
@@ -885,7 +957,7 @@ export function WeatherSection({ clientId, analysis }) {
       localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
       setLocation(loc);
       setSetupMode(false);
-      loadWeather(loc.lat, loc.lon);
+      loadWeather(loc.lat, loc.lon, clientId);
     } catch (e) { setSearchMsg(e.message || "Could not find location"); }
     setSearching(false);
   };
@@ -978,9 +1050,21 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>📍 {location.name}</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>7-day forecast · auto-updates daily</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+              {lastFetched ? `Updated ${Math.floor((Date.now() - lastFetched) / 3600000)}h ago` : "7-day forecast"}
+            </div>
           </div>
-          <button onClick={() => setSetupMode(true)} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={() => loadWeather(location.lat, location.lon)}
+              disabled={loadingFc || !canRefreshWeather}
+              style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: canRefreshWeather ? C.textMuted : C.textMuted, fontSize: 11, fontWeight: 600, cursor: canRefreshWeather && !loadingFc ? "pointer" : "default", opacity: canRefreshWeather && !loadingFc ? 1 : 0.4 }}
+              title={canRefreshWeather ? "Refresh forecast" : "Already refreshed today — resets tomorrow"}
+            >
+              {loadingFc ? "..." : canRefreshWeather ? "↻" : "✓"}
+            </button>
+            <button onClick={() => setSetupMode(true)} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
+          </div>
         </div>
 
         {/* Loading forecast */}
