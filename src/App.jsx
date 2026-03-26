@@ -209,16 +209,19 @@ function AuthScreen({ onAuthenticated }) {
     if (loginPin.length !== 4) { setLoginMsg("Enter your 4-digit PIN"); return; }
     setLoggingIn(true); setLoginMsg(null);
 
-    // ── Offline path: use PIN cached in localStorage from last online login ──
+    // ── Offline path: use PIN and UUID cached in localStorage ──
     if (!navigator.onLine) {
       const savedId = getSavedOwnerId();
-      const savedPin = getSavedPin(); // reads shopmate_pin_${savedId}
+      const savedPin = getSavedPin();
+      const savedUuid = localStorage.getItem("shopmate_client_uuid");
       if (!savedId || id !== savedId) {
         setLoginMsg("You're offline — can only log in as your saved account");
         setLoggingIn(false); return;
       }
-      if (savedPin && loginPin === savedPin) {
-        onAuthenticated(savedId, id);
+      if (savedPin && loginPin === savedPin && savedUuid) {
+        onAuthenticated(savedUuid, id);
+      } else if (!savedUuid) {
+        setLoginMsg("You're offline — please log in online first to enable offline access");
       } else {
         setLoginMsg("Incorrect PIN");
         setLoginPin("");
@@ -227,15 +230,16 @@ function AuthScreen({ onAuthenticated }) {
       return;
     }
 
-    // ── Online path: verify against Supabase, then cache PIN locally ──
+    // ── Online path: verify against Supabase, then cache everything locally ──
     try {
       const client = await getOrCreateClient(id);
       if (!client) { setLoginMsg("Business not found"); setLoggingIn(false); return; }
       const valid = await verifyPin(client.id, loginPin);
       if (!valid) { setLoginMsg("Incorrect PIN"); setLoginPin(""); setLoggingIn(false); return; }
-      // Cache PIN locally so offline login works next time
+      // Cache credentials locally so offline login works next time
       saveOwnerId(id);
       savePin(id, loginPin);
+      localStorage.setItem("shopmate_client_uuid", client.id);
       onAuthenticated(client.id, client.name || id);
     } catch (e) { setLoginMsg("Login failed: " + (e.message || "check connection")); }
     setLoggingIn(false);
@@ -359,6 +363,7 @@ export default function App() {
 
   const handleLogout = () => {
     logout();
+    localStorage.removeItem("shopmate_client_uuid");
     setAuthenticated(false); setClientId(null); setClientName("");
     setAllDays([]); setActiveSection("dashboard"); setActiveTab("home");
   };
