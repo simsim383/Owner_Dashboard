@@ -54,7 +54,7 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 24, marginBottom: 12 }}>📊</div>
         <div style={{ fontSize: 18, fontWeight: 800, color: C.white, marginBottom: 4 }}>Upload Sales Data</div>
-        <div style={{ fontSize: 12, color: C.textMuted }}>ShopMate Item Sales Report (.xls)</div>
+        <div style={{ fontSize: 12, color: C.textMuted }}>EPOS Item Sales Report (.xls)</div>
       </div>
 
       {!pendingData ? (
@@ -113,7 +113,7 @@ export function UploadScreen({ onDataLoaded, uploads, onCancel }) {
               <input type="number" value={transactions} onChange={e => setTransactions(e.target.value)} placeholder={uploadType === "day" ? "e.g. 180" : "Total for period"} style={{ flex: 1, padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 14, outline: "none", fontFamily: "'Inter', sans-serif" }} />
               {transactions && <div style={{ fontSize: 12, color: C.textSecondary, minWidth: 80 }}>Avg basket: {f(totalGross / (parseInt(transactions) || 1))}</div>}
             </div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>From ShopMate Portal dashboard</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>From your EPOS portal dashboard</div>
           </div>
 
           <div style={{ display: "flex", gap: 8 }}>
