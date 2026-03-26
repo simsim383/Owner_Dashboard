@@ -399,7 +399,7 @@ export function NewsSection() {
 // Social & viral product trends for UK convenience stores
 // Uses Claude web search (once per day, cached in localStorage)
 
-const TRENDS_CACHE_KEY = "shopmate_trends_cache";
+const TRENDS_CACHE_KEY = "shopmate_trends_cache_v2";
 const TRENDS_TTL = 23 * 60 * 60 * 1000; // 23 hours
 
 function getTrendsCache() {
@@ -492,25 +492,33 @@ export function TrendsSection() {
     setLoading(true); setError(false);
 
     const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-    const prompt = `Today is ${today}. You are a retail trend advisor for a UK Londis convenience store in County Durham.
+    const prompt = `Today is ${today}. You are a retail trend advisor for UK independent convenience stores and corner shops.
 
-Search the web for what is currently going viral or trending in the UK that a corner shop should know about. Focus on:
-- TikTok viral food and drink products in the UK
-- Viral lifestyle/collectible products relevant to a corner shop (e.g. Labubu, Stanley cups, fidget toys)
-- New product launches trending on social media in the UK
-- "Corner shop haul" type viral content
-- UK food trends from Instagram Reels and YouTube Shorts
-- Anything on UK Twitter/X trending in food, drink or retail
+Search the web thoroughly for what is CURRENTLY going viral or trending in the UK that a corner shop owner should know about RIGHT NOW. Cast a wide net — include anything people are buying or talking about that a convenience store could realistically sell.
 
-Return 6-8 trends. For each, provide:
-- product: The specific product name (e.g. "Echo Falls Blue Raspberry", "Labubu plush toys", "Prime Hydration")
-- category: Short category tag (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬")
+Search for:
+- TikTok viral food, drink and snack products going viral in the UK right now
+- Viral toys, collectibles and novelty items trending in the UK (e.g. Labubu, Pop Mart figures, squishy toys, fidget items, dumpling toys, plush toys, blind boxes)
+- "Corner shop haul" or "convenience store haul" viral content on TikTok and YouTube
+- Viral sweets, American candy or imported snacks being sought after in UK shops
+- New drinks launches trending on UK social media (energy drinks, flavoured water, iced coffee)
+- Anything kids and teenagers are obsessed with right now in the UK
+- Collectible card games or trading cards trending (e.g. Pokemon, Lorcana, One Piece)
+- Seasonal or viral confectionery being talked about
+- Any product going viral on UK TikTok, Instagram Reels or YouTube Shorts
+- Products featured in viral "what I bought at the corner shop" or "haul" videos
+
+Be specific and include niche/novelty items — do NOT just list mainstream products. Corner shop owners need to know about things BEFORE they become mainstream so they can stock them first.
+
+Return 8-10 trends. For each, provide:
+- product: The specific product name (e.g. "Mochi Squishy Dumpling Toys", "Labubu blind boxes", "Prime Hydration")
+- category: Short category tag (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬", "Toys 🧸", "Cards 🃏")
 - why: 1-2 sentences on WHY it's trending and what the social media buzz is about
 - heat: One of exactly: "🔥 Viral now", "📈 Building", "👀 Watch this"
 - stock: One of exactly: "YES", "MAYBE", "NICHE"
-- recommendation: 1-2 sentences on whether a UK corner shop should stock it and why
-- source: Where to get it — be specific e.g. "Booker, Costco" or "Amazon wholesale" or "Specialist importer — not mainstream yet"
-- examples: 2-3 specific product variants or SKUs if known, e.g. "Echo Falls Blue Raspberry 75cl, 187ml"
+- recommendation: 1-2 sentences on whether a UK corner shop should stock it, who is buying it, and the profit opportunity
+- source: Where to get it — be specific e.g. "Booker, Costco", "Amazon wholesale", "Pop Mart UK", "Specialist importer — check eBay wholesale"
+- examples: 2-3 specific product variants if known
 
 Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.`;
 
