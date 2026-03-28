@@ -585,7 +585,7 @@ Search for:
 
 Be specific and include niche/novelty items — do NOT just list mainstream products. Corner shop owners need to know about things BEFORE they become mainstream so they can stock them first.
 
-Return 8-10 trends. For each, provide:
+Return 6 trends only — fewer but better. For each, provide:
 - product: The specific product name (e.g. "Mochi Squishy Dumpling Toys", "Labubu blind boxes", "Prime Hydration")
 - category: Short category tag with emoji (e.g. "Drinks 🥤", "Snacks 🍟", "Collectibles 🪆", "Confectionery 🍬", "Toys 🧸", "Cards 🃏")
 - why: 1-2 sentences on WHY it's trending and what the social media buzz is about
@@ -605,7 +605,7 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
         method: "POST", headers: AI_HDR,
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
+          max_tokens: 4000,
           tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "GB", region: "England", timezone: "Europe/London" } }],
           messages: [{ role: "user", content: prompt }],
         }),
@@ -617,48 +617,42 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
 
-      // Log full response for debugging
-      console.log("Trends raw response:", JSON.stringify(data.content?.map(b => ({ type: b.type, text: b.type === "text" ? b.text?.slice(0, 200) : "[non-text]" })), null, 2));
-
       // Web search responses contain mixed blocks — extract only text blocks
       const text = (data.content || [])
         .filter(b => b.type === "text")
         .map(b => b.text)
         .join("") || "";
 
-      // Try to extract JSON array robustly
-      // Strategy 1: strip markdown fences and find array
-      let parsed = null;
-      const attempts = [
-        text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim(),
-        text,
-        // Strategy 2: find content between first [ and last ]
-        text.slice(text.indexOf("["), text.lastIndexOf("]") + 1),
-      ];
+      if (!text) throw new Error("No text in response — web search may have returned only tool blocks");
 
-      for (const attempt of attempts) {
-        if (!attempt || !attempt.includes("[")) continue;
-        const j1 = attempt.indexOf("[");
-        const j2 = attempt.lastIndexOf("]");
-        if (j1 < 0 || j2 < 0) continue;
-        try {
-          const candidate = attempt.slice(j1, j2 + 1)
-            // Remove citation markers like [1], [2] that web search injects
-            .replace(/\[\d+\]/g, "")
-            // Fix any trailing commas before ]
-            .replace(/,\s*\]/g, "]")
-            .replace(/,\s*\}/g, "}");
-          parsed = JSON.parse(candidate);
-          if (Array.isArray(parsed) && parsed.length > 0) break;
-          parsed = null;
-        } catch { continue; }
+      console.log("Full trends text:", text);
+
+      // Strip markdown fences robustly
+      const stripped = text
+        .replace(/^```json\s*/m, "")
+        .replace(/^```\s*/m, "")
+        .replace(/```\s*$/m, "")
+        .trim();
+
+      // Find the JSON array boundaries
+      const j1 = stripped.indexOf("[");
+      const j2 = stripped.lastIndexOf("]");
+      if (j1 < 0 || j2 < 0) throw new Error("No JSON array found in response");
+
+      let parsed;
+      try {
+        parsed = JSON.parse(stripped.slice(j1, j2 + 1));
+      } catch {
+        // Try cleaning citation markers and trailing commas
+        const cleaned = stripped.slice(j1, j2 + 1)
+          .replace(/\[\d+\]/g, "")
+          .replace(/,(\s*[}\]])/g, "$1");
+        parsed = JSON.parse(cleaned);
       }
 
-      if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
-        throw new Error("Could not parse trends from response");
-      }
+      if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Empty trends array");
 
-      // Validate each trend has required fields, fill defaults if missing
+      // Validate and fill defaults
       const validated = parsed.map(t => ({
         product: t.product || "Unknown product",
         category: t.category || "General",
