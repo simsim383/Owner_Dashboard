@@ -616,16 +616,60 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       }
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const j1 = clean.indexOf("["); const j2 = clean.lastIndexOf("]");
-      if (j1 < 0) throw new Error("No trends found in response");
-      const parsed = JSON.parse(clean.slice(j1, j2 + 1));
-      if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Empty trends array");
-      const ts = Date.now();
-      setTrendsCache(parsed);
-      setTrends(parsed);
-      setLastUpdated(new Date(ts));
+
+      // Web search responses contain mixed blocks — extract only text blocks
+      const text = (data.content || [])
+        .filter(b => b.type === "text")
+        .map(b => b.text)
+        .join("") || "";
+
+      // Try to extract JSON array robustly
+      // Strategy 1: strip markdown fences and find array
+      let parsed = null;
+      const attempts = [
+        text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim(),
+        text,
+        // Strategy 2: find content between first [ and last ]
+        text.slice(text.indexOf("["), text.lastIndexOf("]") + 1),
+      ];
+
+      for (const attempt of attempts) {
+        if (!attempt || !attempt.includes("[")) continue;
+        const j1 = attempt.indexOf("[");
+        const j2 = attempt.lastIndexOf("]");
+        if (j1 < 0 || j2 < 0) continue;
+        try {
+          const candidate = attempt.slice(j1, j2 + 1)
+            // Remove citation markers like [1], [2] that web search injects
+            .replace(/\[\d+\]/g, "")
+            // Fix any trailing commas before ]
+            .replace(/,\s*\]/g, "]")
+            .replace(/,\s*\}/g, "}");
+          parsed = JSON.parse(candidate);
+          if (Array.isArray(parsed) && parsed.length > 0) break;
+          parsed = null;
+        } catch { continue; }
+      }
+
+      if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+        throw new Error("Could not parse trends from response");
+      }
+
+      // Validate each trend has required fields, fill defaults if missing
+      const validated = parsed.map(t => ({
+        product: t.product || "Unknown product",
+        category: t.category || "General",
+        why: t.why || "",
+        heat: ["🔥 Viral now", "📈 Building", "👀 Watch this"].includes(t.heat) ? t.heat : "👀 Watch this",
+        stock: ["YES", "MAYBE", "NICHE"].includes(t.stock) ? t.stock : "MAYBE",
+        recommendation: t.recommendation || "",
+        source: t.source || "",
+        examples: t.examples || "",
+      }));
+
+      setTrendsCache(validated);
+      setTrends(validated);
+      setLastUpdated(new Date());
       const newCount = incrementRefreshCount();
       setRefreshCount(newCount);
     } catch (e) {
