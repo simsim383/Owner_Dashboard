@@ -617,6 +617,9 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
 
+      // Log full response for debugging
+      console.log("Trends raw response:", JSON.stringify(data.content?.map(b => ({ type: b.type, text: b.type === "text" ? b.text?.slice(0, 200) : "[non-text]" })), null, 2));
+
       // Web search responses contain mixed blocks — extract only text blocks
       const text = (data.content || [])
         .filter(b => b.type === "text")
