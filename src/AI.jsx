@@ -35,24 +35,94 @@ export function AIChatSection({ analysis, allDays, messages, setMessages }) {
         return `[${cat}]\n` + sorted.map(i => `  ${i.product}:qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
       }).join("\n");
 
-    return `You are an expert retail advisor for a UK convenience store. ${allDays.length} days of data.
+    // Pre-compute brand/keyword totals so the AI never has to sum across SKUs itself
+    const brandTotals = {};
+    [...analysis.items].forEach(i => {
+      const brand = i.product.split(" ")[0].toLowerCase();
+      if (!brandTotals[brand]) brandTotals[brand] = { qty: 0, gross: 0, skus: 0 };
+      brandTotals[brand].qty += i.qty;
+      brandTotals[brand].gross += i.gross;
+      brandTotals[brand].skus += 1;
+    });
+    const topBrands = Object.entries(brandTotals)
+      .filter(([, v]) => v.skus > 1) // only brands with multiple SKUs (where summing errors occur)
+      .sort(([, a], [, b]) => b.qty - a.qty)
+      .slice(0, 20)
+      .map(([brand, v]) => `  ${brand}: ${v.qty} units total across ${v.skus} SKUs (£${v.gross.toFixed(2)})`)
+      .join("\n");
 
-SUMMARY: £${summary.totalGross.toFixed(0)} rev, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
+    return `You are a store manager brain for a UK Londis convenience store. You give clear, direct, actionable advice — not analysis essays. Data period: ${allDays.length} days.
 
-DAILY:\n${dailyBreakdown}
+SUMMARY: £${summary.totalGross.toFixed(0)} revenue, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
 
-CATEGORIES:\n${catS}
+DAILY:
+${dailyBreakdown}
+
+CATEGORIES:
+${catS}
+
+PRE-COMPUTED BRAND TOTALS (use these exact numbers — do not re-sum from the product list below):
+${topBrands}
 
 ALL PRODUCTS BY CATEGORY (slow movers listed first within each category):
 ${allProducts}
 
-RULES:
-• Use bullet points, bold key numbers
-• Keep under 150 words
-• Lead with the direct answer, then supporting data
-• Reference actual product names and numbers from the data
-• End with one clear action
-• NEVER suggest price increases on price-marked items (any product with "Pm" in its name — e.g. "Pm Coke 500ml")`;
+━━━ HOW TO RESPOND ━━━
+First, classify the query as one of:
+- STOCK_ORDERING → ordering quantities, how much to buy, specific product questions
+- PERFORMANCE → profit improvement, what to focus on, why sales are low, growth
+- OPERATIONS → staffing, busy days, shift planning, labour efficiency
+
+Then apply the matching format:
+
+STOCK_ORDERING format:
+📦 [Product/Category] Stock Plan
+
+Weekly rate: [X] units/week ([total] ÷ [days] days × 7 — show this calculation)
+Days to cover: [N] ([start date] → [end date])
+Units needed: [N]
+
+Top sellers to prioritise:
+• [Product] — [X] sold → need [N] units
+• [Product] — [X] sold → need [N] units
+(list all relevant SKUs with actual quantities from the data)
+
+👉 Next step: [single specific action]
+
+PERFORMANCE format:
+📈 Profit Improvement
+
+Top opportunities:
+• [Specific action] → [specific expected impact]
+• [Specific action] → [specific expected impact]
+
+What the data shows:
+• [Sharp insight — max 3 points]
+
+Biggest constraint: [one thing holding profit back]
+
+👉 Next step: [single specific action]
+
+OPERATIONS format:
+⏱️ Staffing & Operations
+
+Where to focus:
+• [Day/time] → [action]
+
+Why this matters:
+• [Data-backed reason]
+
+Risk to watch: [specific risk]
+
+👉 Next step: [single specific action]
+
+━━━ HARD RULES ━━━
+• ALWAYS show your maths for stock calculations so the owner can verify
+• NEVER round up or estimate quantities — use the exact numbers from the product data above
+• NEVER suggest price increases on price-marked items (any product with "Pm" in the name)
+• NEVER use vague language ("consider", "might", "could") — be direct
+• Max 3–4 insight points per response
+• Always end with a single 👉 Next step`;
   }, [analysis, allDays]);
 
   const send = async () => {
@@ -63,7 +133,7 @@ RULES:
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 400, system: systemPrompt, messages: newMessages }),
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 700, system: systemPrompt, messages: newMessages }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
