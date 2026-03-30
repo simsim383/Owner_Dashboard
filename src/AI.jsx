@@ -51,6 +51,15 @@ export function AIChatSection({ analysis, allDays, messages, setMessages }) {
       .map(([brand, v]) => `  ${brand}: ${v.qty} units total across ${v.skus} SKUs (£${v.gross.toFixed(2)})`)
       .join("\n");
 
+    // Weather history — days with recorded weather data (grows over time as uploads accumulate)
+    const weatherDays = allDays.filter(d => d.weather && d.weather.maxTemp != null);
+    const weatherHistoryStr = weatherDays.length === 0 ? null : weatherDays.map(d => {
+      const g = d.items.reduce((s, i) => s + i.gross, 0);
+      const q = d.items.reduce((s, i) => s + i.qty, 0);
+      const top5 = [...d.items].sort((a, b) => b.qty - a.qty).slice(0, 5).map(i => i.product + "(" + i.qty + ")").join(", ");
+      return "  " + d.dates.start + ": " + d.weather.maxTemp + "C/" + d.weather.minTemp + "C, " + d.weather.weatherDesc + " — £" + g.toFixed(0) + " rev, " + q + " units. Top: " + top5;
+    }).join("\n");
+
     return `You are a store manager brain for a UK Londis convenience store. You give clear, direct, actionable advice — not analysis essays. Data period: ${allDays.length} days.
 
 SUMMARY: £${summary.totalGross.toFixed(0)} revenue, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
@@ -66,6 +75,7 @@ ${topBrands}
 
 ALL PRODUCTS BY CATEGORY (slow movers listed first within each category):
 ${allProducts}
+${weatherHistoryStr ? "\nWEATHER + SALES HISTORY (actual weather recorded on past sales days):\n" + weatherHistoryStr + "\n\nFor forecast-based stock questions: find the closest matching days above (within 3 degrees, similar weather conditions) and use their actual top sellers as your recommendation. Always state which past date(s) you are drawing from." : ""}
 
 ━━━ HOW TO RESPOND ━━━
 First, classify the query as one of:
@@ -906,7 +916,7 @@ async function geocodeLocation(query) {
 }
 
 async function fetchForecast(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,precipitation_sum,weathercode&timezone=Europe%2FLondon&forecast_days=7`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&timezone=Europe%2FLondon&forecast_days=7`;
   const res = await fetch(url);
   const data = await res.json();
   if (!data.daily) throw new Error("Weather data unavailable");
@@ -914,16 +924,31 @@ async function fetchForecast(lat, lon) {
   return data.daily.time.map((date, i) => ({
     date,
     maxTemp: Math.round(data.daily.temperature_2m_max[i]),
+    minTemp: Math.round(data.daily.temperature_2m_min[i]),
     precipitation: data.daily.precipitation_sum[i],
     weatherCode: data.daily.weathercode[i],
     description: wmoDescription(data.daily.weathercode[i]),
   }));
 }
 
-// WMO weather code to description
+// WMO weather code to description — using actual WMO code table
 function wmoDescription(code) {
-  if (code === 0) return "Clear sky";
-  if (code <= 3) return "Partly cloudy";
+  const WMO = {
+    0:  "Clear sky",
+    1:  "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Foggy", 48: "Icy fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+    56: "Freezing drizzle", 57: "Heavy freezing drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    66: "Freezing rain", 67: "Heavy freezing rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains",
+    80: "Light showers", 81: "Rain showers", 82: "Heavy showers",
+    85: "Snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Heavy thunderstorm with hail",
+  };
+  if (WMO[code]) return WMO[code];
+  // Fallback for any unlisted codes using range bands
+  if (code <= 3)  return "Partly cloudy";
   if (code <= 49) return "Foggy";
   if (code <= 59) return "Drizzle";
   if (code <= 69) return "Rain";
@@ -1185,6 +1210,7 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
                   </div>
                   <div style={{ fontSize: 18, marginBottom: 4 }}>{weatherIcon(type, day.description)}</div>
                   <div style={{ fontSize: 13, fontWeight: 800, color: tempColor(day.maxTemp) }}>{day.maxTemp}°</div>
+                  <div style={{ fontSize: 10, color: C.textMuted }}>{day.minTemp}°</div>
                   {isNotable && (
                     <div style={{ fontSize: 8, marginTop: 3, fontWeight: 700, color: type === "hot" ? "#f97316" : type === "cold" ? "#60a5fa" : type === "rain" ? "#94a3b8" : "#84cc16", textTransform: "uppercase" }}>
                       {type === "hot" ? "Hot" : type === "warm" ? "Warm" : type === "cold" ? "Cold" : "Rain"}
@@ -1209,7 +1235,7 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>{dayLabel(day.date)}</div>
-                      <div style={{ fontSize: 12, color: C.textMuted }}>{day.description} · {day.maxTemp}°C</div>
+                      <div style={{ fontSize: 12, color: C.textMuted }}>{day.description} · {day.maxTemp}°C / {day.minTemp}°C</div>
                     </div>
                     <div style={{ fontSize: 28 }}>{weatherIcon(type, day.description)}</div>
                   </div>
