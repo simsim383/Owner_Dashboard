@@ -393,7 +393,7 @@ export function NewsSection() {
             .then(data => {
               if (data.status !== "ok") throw new Error(data.message || "Feed error");
               status[feed.name] = { ok: true, count: data.items?.length || 0 };
-              return (data.items || []).slice(0, 5).map(item => ({
+              return (data.items || []).slice(0, 3).map(item => ({
                 title: stripHtml(item.title),
                 summary: stripHtml(item.description || item.content || "").slice(0, 140) + "…",
                 url: item.link,
@@ -411,7 +411,7 @@ export function NewsSection() {
         .flatMap(r => r.status === "fulfilled" ? r.value : [])
         .filter(a => a.title)
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-        .slice(0, 12);
+        .slice(0, 5);
 
       setFeedStatus(status);
       if (all.length === 0) { setError(true); } else { setArticles(all); }
@@ -515,8 +515,7 @@ export function NewsSection() {
 // Uses Claude web search (once per day, cached in localStorage)
 
 const TRENDS_CACHE_KEY = "shopmate_trends_cache_v2";
-const TRENDS_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const MAX_REFRESHES_PER_DAY = 1;
+const TRENDS_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days
 
 function getTrendsCache() {
   try {
@@ -532,24 +531,6 @@ function setTrendsCache(trends) {
   try { localStorage.setItem(TRENDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), trends })); } catch {}
 }
 
-// Returns how many refreshes have been done today
-function getRefreshCountToday() {
-  try {
-    const raw = localStorage.getItem("ri_trends_refreshes");
-    if (!raw) return 0;
-    const { date, count } = JSON.parse(raw);
-    if (date !== new Date().toDateString()) return 0;
-    return count;
-  } catch { return 0; }
-}
-
-function incrementRefreshCount() {
-  try {
-    const count = getRefreshCountToday() + 1;
-    localStorage.setItem("ri_trends_refreshes", JSON.stringify({ date: new Date().toDateString(), count }));
-    return count;
-  } catch { return 1; }
-}
 
 const HEAT_CONFIG = {
   "🔥 Viral now":    { bg: "rgba(239,68,68,0.08)",   border: "rgba(239,68,68,0.25)",   color: "#ef4444" },
@@ -617,10 +598,8 @@ export function TrendsSection() {
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError]     = useState(false);
-  const [refreshCount, setRefreshCount] = useState(getRefreshCountToday());
 
-  const refreshesLeft = MAX_REFRESHES_PER_DAY - refreshCount;
-  const canRefresh = refreshesLeft > 0;
+  const canRefresh = !lastUpdated || (Date.now() - lastUpdated.getTime() > TRENDS_TTL);
 
   // On mount — load from cache only, never auto-fetch
   useEffect(() => {
@@ -737,8 +716,6 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
       setTrendsCache(validated);
       setTrends(validated);
       setLastUpdated(new Date());
-      const newCount = incrementRefreshCount();
-      setRefreshCount(newCount);
     } catch (e) {
       console.error("Trends fetch error:", e.message);
       setError(e.message || "Unknown error");
@@ -747,7 +724,10 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
   };
 
   const cacheAge = lastUpdated ? Math.round((Date.now() - lastUpdated) / 3600000) : null;
-  const ageLabel = cacheAge === 0 ? "Updated just now" : cacheAge === 1 ? "Updated 1 hour ago" : cacheAge != null ? `Updated ${cacheAge}h ago` : "Tap refresh to load trends";
+  const ageLabel = cacheAge == null ? "Tap refresh to load trends"
+    : cacheAge < 1 ? "Updated just now"
+    : cacheAge < 24 ? `Updated ${cacheAge}h ago`
+    : `Updated ${Math.round(cacheAge / 24)}d ago · refreshes every 5 days`;
 
   return (
     <div style={{ paddingTop: 4 }}>
@@ -757,8 +737,8 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
           <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: -0.3 }}>Trending Now 🔥</div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{ageLabel}</div>
         </div>
-        <button onClick={fetchTrends} disabled={loading || !canRefresh} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: canRefresh ? "#64748b" : "#334155", fontSize: 11, fontWeight: 600, cursor: (loading || !canRefresh) ? "default" : "pointer", opacity: (loading || !canRefresh) ? 0.5 : 1 }} title={canRefresh ? "Refresh trends once per day" : "Already refreshed today — resets tomorrow"}>
-          {loading ? "Searching..." : !canRefresh ? "✓ Done today" : "↻ Refresh"}
+        <button onClick={fetchTrends} disabled={loading || !canRefresh} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #1e293b", background: "#0f172a", color: canRefresh ? "#64748b" : "#334155", fontSize: 11, fontWeight: 600, cursor: (loading || !canRefresh) ? "default" : "pointer", opacity: (loading || !canRefresh) ? 0.5 : 1 }} title={canRefresh ? "Refresh trends (every 5 days)" : "Trends are up to date — refreshes automatically every 5 days"}>
+          {loading ? "Searching..." : !canRefresh ? "✓ Up to date" : "↻ Refresh"}
         </button>
       </div>
 
@@ -808,7 +788,7 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
 
       {!loading && trends && trends.length > 0 && (
         <div style={{ textAlign: "center", padding: "12px 0", fontSize: 11, color: "#475569" }}>
-          {trends.length} trends · tap any card to expand · refreshes daily
+          {trends.length} trends · tap any card to expand · refreshes every 5 days
         </div>
       )}
     </div>
@@ -848,11 +828,11 @@ const UPLIFT = {
 function classifyDay(maxTemp, description) {
   const desc = (description || "").toLowerCase();
   const isRain = desc.includes("rain") || desc.includes("shower") || desc.includes("drizzle");
-  if (maxTemp >= 22) return "hot";
   if (maxTemp >= 18) return "hot";
-  if (maxTemp >= 13) return "warm";
   if (maxTemp <= 7)  return "cold";
-  return isRain ? "rain" : "normal";
+  if (isRain)        return "rain";
+  if (maxTemp >= 13) return "warm";
+  return "normal";
 }
 
 function weatherIcon(type, desc) {
@@ -991,7 +971,7 @@ function getWeatherCache(clientId) {
     const raw = localStorage.getItem(`ri_weather_${clientId}`);
     if (!raw) return null;
     const { ts, forecast } = JSON.parse(raw);
-    if (Date.now() - ts > 24 * 60 * 60 * 1000) return null;
+    if (Date.now() - ts > 6 * 60 * 60 * 1000) return null;
     return { forecast, ts };
   } catch { return null; }
 }
@@ -1013,7 +993,7 @@ export function WeatherSection({ clientId, analysis }) {
   const [expandedDay, setExpandedDay] = useState(null);
   const [lastFetched, setLastFetched] = useState(null);
 
-  const canRefreshWeather = !lastFetched || (Date.now() - lastFetched > 24 * 60 * 60 * 1000);
+  const canRefreshWeather = !lastFetched || (Date.now() - lastFetched > 6 * 60 * 60 * 1000);
 
   // Load saved location on mount
   useEffect(() => {
