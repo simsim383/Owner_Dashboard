@@ -404,7 +404,12 @@ export default function App() {
   const addDay = useCallback(async (data, uploadType, transactions) => {
     if (clientId) {
       setSbStatus("Saving...");
-      const result = await pushToSupabase(clientId, data, uploadType || "day", transactions);
+      let clientLocation = null;
+      try {
+        const locRaw = localStorage.getItem(`weather_loc_${clientId}`);
+        if (locRaw) clientLocation = JSON.parse(locRaw);
+    } catch {}
+      const result = await pushToSupabase(clientId, data, uploadType || "day", transactions, clientLocation);
       if (result.ok) {
         setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
         const days = await loadFromSupabase(clientId);
