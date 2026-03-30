@@ -905,14 +905,41 @@ function getWeatherProducts(analysis, weatherType) {
 }
 
 // ─── LOCATION SETUP ─────────────────────────────────────────────
-async function geocodeLocation(query) {
-  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en&format=json`;
-  const res = await fetch(url);
+// Resolve a UK postcode to lat/lon using postcodes.io (free, no key)
+async function resolvePostcode(postcode) {
+  const clean = postcode.trim().toUpperCase().replace(/\s+/g, "");
+  const res = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(clean)}`);
   const data = await res.json();
-  if (!data.results?.length) throw new Error("Location not found");
-  // Prefer UK results
-  const uk = data.results.find(r => r.country_code === "GB") || data.results[0];
-  return { name: uk.name, lat: uk.latitude, lon: uk.longitude, country: uk.country };
+  if (data.status !== 200 || !data.result) throw new Error("Postcode not found — check and try again");
+  const r = data.result;
+  return { name: r.admin_district || r.parish || clean, lat: r.latitude, lon: r.longitude, postcode: clean };
+}
+
+// GPS location via browser
+function getGPSLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error("GPS not available on this device")); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      err => reject(new Error(err.code === 1 ? "Location permission denied" : "Could not get GPS location")),
+      { timeout: 8000, maximumAge: 60000 }
+    );
+  });
+}
+
+// Reverse geocode lat/lon to a place name using Open-Meteo
+async function reverseGeocode(lat, lon) {
+  try {
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${lat.toFixed(2)},${lon.toFixed(2)}&count=1&language=en&format=json`);
+    // Open-Meteo doesn't support reverse geocoding — use postcodes.io instead
+    const r2 = await fetch(`https://api.postcodes.io/postcodes?lon=${lon}&lat=${lat}&limit=1`);
+    const d2 = await r2.json();
+    if (d2.status === 200 && d2.result?.length) {
+      const r = d2.result[0];
+      return r.admin_district || r.parish || "Your location";
+    }
+  } catch {}
+  return "Your location";
 }
 
 async function fetchForecast(lat, lon) {
@@ -1062,19 +1089,37 @@ export function WeatherSection({ clientId, analysis }) {
     setLoadingFc(false);
   };
 
+  const handleGPS = async () => {
+    setSearching(true); setSearchMsg(null);
+    try {
+      const { lat, lon } = await getGPSLocation();
+      const name = await reverseGeocode(lat, lon);
+      const loc = { name, lat, lon };
+      await saveClientLocation(clientId, name, lat, lon);
+      localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
+      // Clear stale forecast cache so it fetches fresh immediately
+      localStorage.removeItem(`ri_weather_${clientId}`);
+      setLocation(loc);
+      setSetupMode(false);
+      loadWeather(lat, lon, clientId);
+    } catch (e) { setSearchMsg(e.message || "Could not get GPS location"); }
+    setSearching(false);
+  };
+
   const handleSearch = async () => {
     if (!query.trim()) return;
     setSearching(true); setSearchMsg(null);
     try {
-      const result = await geocodeLocation(query.trim());
-      // Save to Supabase + localStorage
+      const result = await resolvePostcode(query.trim());
       await saveClientLocation(clientId, result.name, result.lat, result.lon);
-      const loc = { name: result.name, lat: result.lat, lon: result.lon };
+      const loc = { name: result.name, lat: result.lat, lon: result.lon, postcode: result.postcode };
       localStorage.setItem(`weather_loc_${clientId}`, JSON.stringify(loc));
+      // Clear stale forecast cache so it fetches fresh immediately
+      localStorage.removeItem(`ri_weather_${clientId}`);
       setLocation(loc);
       setSetupMode(false);
       loadWeather(loc.lat, loc.lon, clientId);
-    } catch (e) { setSearchMsg(e.message || "Could not find location"); }
+    } catch (e) { setSearchMsg(e.message || "Invalid postcode — try e.g. IP1 3PH"); }
     setSearching(false);
   };
 
@@ -1128,15 +1173,26 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
   if (!location || setupMode) return (
     <SectionCard title="Weather Intelligence" icon="🌤️">
       <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16, lineHeight: 1.6 }}>
-        Enter your store's town or postcode to get a personalised 7-day weather forecast with stock recommendations based on your actual sales data.
+        Set your store location for a personalised 7-day forecast. Use GPS for automatic detection or enter your postcode for pinpoint accuracy.
       </div>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6 }}>STORE LOCATION</div>
+      <button
+        onClick={handleGPS}
+        disabled={searching}
+        style={{ width: "100%", padding: "12px", borderRadius: 10, border: `1px solid ${C.accentLight}`, background: "rgba(59,111,212,0.1)", color: C.accentLight, fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}
+      >
+        {searching ? "Detecting..." : "📍 Use My Location (GPS)"}
+      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div style={{ flex: 1, height: 1, background: C.border }} />
+        <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>OR ENTER POSTCODE</div>
+        <div style={{ flex: 1, height: 1, background: C.border }} />
+      </div>
       <input
         value={query}
-        onChange={e => { setQuery(e.target.value); setSearchMsg(null); }}
+        onChange={e => { setQuery(e.target.value.toUpperCase()); setSearchMsg(null); }}
         onKeyDown={e => e.key === "Enter" && handleSearch()}
-        placeholder="e.g. Ipswich, IP1 or Norwich"
-        style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 14, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8 }}
+        placeholder="e.g. IP1 3PH"
+        style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 14, outline: "none", fontFamily: "Inter, sans-serif", boxSizing: "border-box", marginBottom: 8, letterSpacing: 2 }}
         autoFocus
       />
       {searchMsg && <div style={{ fontSize: 12, color: C.redText, marginBottom: 8 }}>{searchMsg}</div>}
@@ -1145,7 +1201,7 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
         disabled={searching || !query.trim()}
         style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: query.trim() ? C.accentLight : C.surface, color: query.trim() ? C.white : C.textMuted, fontSize: 14, fontWeight: 700, cursor: "pointer" }}
       >
-        {searching ? "Finding location..." : "Set Location →"}
+        {searching ? "Looking up postcode..." : "Set Location →"}
       </button>
       {location && setupMode && (
         <button onClick={() => setSetupMode(false)} style={{ width: "100%", marginTop: 8, padding: "10px", borderRadius: 10, border: `1px solid ${C.border}`, background: "none", color: C.textMuted, fontSize: 13, cursor: "pointer" }}>
@@ -1179,7 +1235,7 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
             >
               {loadingFc ? "..." : canRefreshWeather ? "↻" : "✓"}
             </button>
-            <button onClick={() => setSetupMode(true)} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
+            <button onClick={() => setSetupMode(true); localStorage.removeItem(`ri_weather_${clientId}`); } style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
           </div>
         </div>
 
