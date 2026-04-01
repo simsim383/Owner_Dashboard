@@ -1415,7 +1415,7 @@ Keep it under 120 words. Be specific to their actual products — no generic adv
             >
               {loadingFc ? "..." : canRefreshWeather ? "↻" : "✓"}
             </button>
-            <button onClick={() => setSetupMode(true); localStorage.removeItem(`ri_weather_${clientId}`); } style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
+            <button onClick={() => { setSetupMode(true); localStorage.removeItem(`ri_weather_${clientId}`); }} style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.textMuted, fontSize: 11, cursor: "pointer" }}>Change</button>
           </div>
         </div>
 
