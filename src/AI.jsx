@@ -5,6 +5,123 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { C, Badge, SectionCard, EmptyState, Insight, f, fi, pct } from "./components.jsx";
 import { ANTHROPIC_KEY, AI_MODEL, AI_HDR } from "./config.js";
 
+// ─── MARKDOWN RENDERER FOR AI RESPONSES ────────────────────────
+function AIMessage({ content }) {
+  const lines = content.split("\n");
+  const elements = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Skip empty lines between blocks
+    if (!line.trim()) { i++; continue; }
+
+    // H1 heading: # text
+    if (line.startsWith("# ")) {
+      elements.push(
+        <div key={i} style={{ fontSize: 15, fontWeight: 800, color: "#ffffff", marginBottom: 10, marginTop: elements.length > 0 ? 4 : 0, letterSpacing: -0.3, display: "flex", alignItems: "center", gap: 6 }}>
+          {line.replace(/^#+ /, "")}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // H2 heading: ## text
+    if (line.startsWith("## ")) {
+      elements.push(
+        <div key={i} style={{ fontSize: 11, fontWeight: 700, color: C.accentLight, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, marginTop: elements.length > 0 ? 10 : 0 }}>
+          {line.replace(/^##+ /, "")}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Divider: ---
+    if (line.trim() === "---") {
+      elements.push(<div key={i} style={{ height: 1, background: C.border, margin: "8px 0" }} />);
+      i++; continue;
+    }
+
+    // Bullet point: - text or • text
+    if (line.match(/^[-•]\s/) || line.match(/^[*]\s/)) {
+      const bulletLines = [];
+      while (i < lines.length && (lines[i].match(/^[-•*]\s/) || lines[i].match(/^\s+[-•*]\s/))) {
+        bulletLines.push(lines[i].replace(/^[-•*]\s/, "").replace(/^\s+[-•*]\s/, ""));
+        i++;
+      }
+      elements.push(
+        <div key={i} style={{ marginBottom: 6 }}>
+          {bulletLines.map((bl, bi) => (
+            <div key={bi} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.accentLight, marginTop: 6, flexShrink: 0 }} />
+              <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.55, flex: 1 }} dangerouslySetInnerHTML={{ __html: renderInline(bl) }} />
+            </div>
+          ))}
+        </div>
+      );
+      continue;
+    }
+
+    // 👉 Next step line — highlight it
+    if (line.startsWith("👉")) {
+      elements.push(
+        <div key={i} style={{ marginTop: 10, padding: "10px 12px", borderRadius: 8, background: "rgba(59,111,212,0.12)", border: "1px solid rgba(59,111,212,0.25)" }}>
+          <div style={{ fontSize: 13, color: C.white, fontWeight: 700, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: renderInline(line) }} />
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Table: | col | col |
+    if (line.startsWith("|")) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].startsWith("|")) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      const rows = tableLines.filter(l => !l.match(/^\|[-\s|]+\|$/)); // skip separator row
+      elements.push(
+        <div key={i} style={{ marginBottom: 8, borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          {rows.map((row, ri) => {
+            const cells = row.split("|").filter(cell => cell.trim());
+            const isHeader = ri === 0;
+            return (
+              <div key={ri} style={{ display: "flex", background: isHeader ? "rgba(59,111,212,0.15)" : ri % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)", borderBottom: ri < rows.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                {cells.map((cell, ci) => (
+                  <div key={ci} style={{ flex: 1, padding: "8px 10px", fontSize: 12, color: isHeader ? C.white : C.textPrimary, fontWeight: isHeader ? 700 : 400, lineHeight: 1.4 }} dangerouslySetInnerHTML={{ __html: renderInline(cell.trim()) }} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      );
+      continue;
+    }
+
+    // Regular paragraph
+    elements.push(
+      <div key={i} style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.6, marginBottom: 4 }} dangerouslySetInnerHTML={{ __html: renderInline(line) }} />
+    );
+    i++;
+  }
+
+  return (
+    <div style={{ padding: "12px 14px" }}>
+      {elements}
+    </div>
+  );
+}
+
+// Render inline markdown: **bold**, *italic*, \`code\`
+function renderInline(text) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#ffffff;font-weight:700">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em style="color:#e2e8f0">$1</em>')
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(59,111,212,0.2);padding:1px 5px;border-radius:4px;font-size:11px;color:#93c5fd">$1</code>')
+    .replace(/👉 \*\*([^*]+)\*\*/g, '👉 <strong style="color:#ffffff">$1</strong>');
+}
+
 // ─── AI CHAT ────────────────────────────────────────────────────
 export function AIChatSection({ analysis, allDays, messages, setMessages }) {
   const [input, setInput] = useState("");
@@ -51,6 +168,38 @@ export function AIChatSection({ analysis, allDays, messages, setMessages }) {
       .map(([brand, v]) => `  ${brand}: ${v.qty} units total across ${v.skus} SKUs (£${v.gross.toFixed(2)})`)
       .join("\n");
 
+    // Per-day top sellers — gives AI actual product-level data for specific day questions
+    const perDayTopSellers = allDays.map(d => {
+      const g = d.items.reduce((s, i) => s + i.gross, 0);
+      const q = d.items.reduce((s, i) => s + i.qty, 0);
+      const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
+      const dayLabel = day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?";
+      const top8 = [...d.items]
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, 8)
+        .map(i => `${i.product}(${i.qty},£${i.gross.toFixed(2)})`)
+        .join(", ");
+      return `  ${dayLabel} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units | ${top8}`;
+    }).join("\n");
+
+    // Pre-computed day rankings — so AI never has to guess which day was busiest
+    const dayStats = allDays.map(d => ({
+      date: d.dates?.start,
+      weekday: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long" }) : "?",
+      gross: d.items.reduce((s, i) => s + i.gross, 0),
+      qty: d.items.reduce((s, i) => s + i.qty, 0),
+      profit: d.items.filter(i => i.hasCost).reduce((s, i) => s + (i.grossProfit || 0), 0),
+      transactions: d.transactions || null,
+    }));
+    const sortedByRev = [...dayStats].sort((a, b) => b.gross - a.gross);
+    const busiest = sortedByRev[0];
+    const quietest = sortedByRev[sortedByRev.length - 1];
+    const busiestProfit = [...dayStats].sort((a, b) => b.profit - a.profit)[0];
+    const dayRankings = `Busiest by revenue: ${busiest?.weekday} ${busiest?.date} — £${busiest?.gross.toFixed(0)}, ${busiest?.qty} units${busiest?.transactions ? ", " + busiest.transactions + " trans" : ""}
+Quietest by revenue: ${quietest?.weekday} ${quietest?.date} — £${quietest?.gross.toFixed(0)}, ${quietest?.qty} units
+Most profitable day: ${busiestProfit?.weekday} ${busiestProfit?.date} — £${busiestProfit?.profit.toFixed(0)} profit
+Top 5 days by revenue: ${sortedByRev.slice(0, 5).map((d, i) => `${i + 1}. ${d.weekday} ${d.date} £${d.gross.toFixed(0)}`).join(", ")}`;
+
     // Weather history — days with recorded weather data (grows over time as uploads accumulate)
     const weatherDays = allDays.filter(d => d.weather && d.weather.maxTemp != null);
     const weatherHistoryStr = weatherDays.length === 0 ? null : weatherDays.map(d => {
@@ -64,11 +213,17 @@ export function AIChatSection({ analysis, allDays, messages, setMessages }) {
 
 SUMMARY: £${summary.totalGross.toFixed(0)} revenue, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
 
-DAILY:
+DAILY SUMMARY:
 ${dailyBreakdown}
+
+PER-DAY TOP SELLERS (top 8 products each day by units sold):
+${perDayTopSellers}
 
 CATEGORIES:
 ${catS}
+
+PRE-COMPUTED DAY RANKINGS (use these exact figures — do not re-derive from the daily list above):
+${dayRankings}
 
 PRE-COMPUTED BRAND TOTALS (use these exact numbers — do not re-sum from the product list below):
 ${topBrands}
@@ -88,45 +243,45 @@ Then apply the matching format:
 STOCK_ORDERING format:
 📦 [Product/Category] Stock Plan
 
-Weekly rate: [X] units/week ([total] ÷ [days] days × 7 — show this calculation)
-Days to cover: [N] ([start date] → [end date])
-Units needed: [N]
+**Weekly rate:** [X] units/week ([total] ÷ [days] days × 7)
+**Days to cover:** [N] ([start date] → [end date])
+**Units needed:** [N]
 
-Top sellers to prioritise:
-• [Product] — [X] sold → need [N] units
-• [Product] — [X] sold → need [N] units
-(list all relevant SKUs with actual quantities from the data)
+## Top sellers to prioritise
+- [Product] — [X] sold → need [N] units
+- [Product] — [X] sold → need [N] units
 
-👉 Next step: [single specific action]
+👉 **Next step:** [single specific action]
 
 PERFORMANCE format:
 📈 Profit Improvement
 
-Top opportunities:
-• [Specific action] → [specific expected impact]
-• [Specific action] → [specific expected impact]
+## Top opportunities
+- [Specific action] → [specific expected impact]
+- [Specific action] → [specific expected impact]
 
-What the data shows:
-• [Sharp insight — max 3 points]
+## What the data shows
+- [Sharp insight — max 3 points]
 
-Biggest constraint: [one thing holding profit back]
+**Biggest constraint:** [one thing holding profit back]
 
-👉 Next step: [single specific action]
+👉 **Next step:** [single specific action]
 
 OPERATIONS format:
 ⏱️ Staffing & Operations
 
-Where to focus:
-• [Day/time] → [action]
+## Where to focus
+- [Day/time] → [action]
 
-Why this matters:
-• [Data-backed reason]
+## Why this matters
+- [Data-backed reason]
 
-Risk to watch: [specific risk]
+**Risk to watch:** [specific risk]
 
-👉 Next step: [single specific action]
+👉 **Next step:** [single specific action]
 
 ━━━ HARD RULES ━━━
+• NEVER use markdown tables (| col | col |) — use bullet points instead
 • ALWAYS show your maths for stock calculations so the owner can verify
 • NEVER round up or estimate quantities — use the exact numbers from the product data above
 • NEVER suggest price increases on price-marked items (any product with "Pm" in the name)
@@ -143,7 +298,7 @@ Risk to watch: [specific risk]
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 700, system: systemPrompt, messages: newMessages }),
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 800, system: systemPrompt, messages: newMessages }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
@@ -157,19 +312,44 @@ Risk to watch: [specific risk]
   return (
     <SectionCard title="AI Assistant" icon="🤖">
       {!ANTHROPIC_KEY && <EmptyState msg="Add API key in config.js to enable AI" />}
-      <div ref={chatRef} style={{ maxHeight: 380, overflowY: "auto", marginBottom: 12 }}>
+      <style>{`@keyframes pulse{0%,80%,100%{opacity:0.3}40%{opacity:1}}`}</style>
+      <div ref={chatRef} style={{ maxHeight: 480, overflowY: "auto", marginBottom: 12, scrollbarWidth: "none" }}>
         {messages.length === 0 && (
-          <div style={{ padding: "16px 0", color: C.textMuted, fontSize: 13, lineHeight: 1.6 }}>
-            Ask anything about your sales data — best sellers, margin analysis, ordering quantities, trends.
+          <div style={{ padding: "8px 0 4px" }}>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12, lineHeight: 1.5 }}>Ask anything about your sales data. Try:</div>
+            {[
+              "What was my busiest day and why?",
+              "What should I order this week?",
+              "Which products have the best margin?",
+              "How do I increase profit?",
+            ].map((q, i) => (
+              <div key={i} onClick={() => setInput(q)} style={{ padding: "9px 12px", marginBottom: 6, borderRadius: 8, background: C.surface, border: `1px solid ${C.border}`, fontSize: 12, color: C.textSecondary, cursor: "pointer", lineHeight: 1.4 }}>
+                {q}
+              </div>
+            ))}
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10, background: m.role === "user" ? C.accentGlow : C.surface, border: `1px solid ${m.role === "user" ? "rgba(59,111,212,0.2)" : C.border}` }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: m.role === "user" ? C.accentLight : C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{m.role === "user" ? "You" : "AI"}</div>
-            <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.content}</div>
+          <div key={i} style={{ marginBottom: 10, borderRadius: 12, overflow: "hidden", background: m.role === "user" ? C.accentGlow : C.surface, border: `1px solid ${m.role === "user" ? "rgba(59,111,212,0.2)" : C.border}` }}>
+            {m.role === "user" ? (
+              <div style={{ padding: "10px 14px", fontSize: 14, color: C.white, lineHeight: 1.5 }}>{m.content}</div>
+            ) : (
+              <AIMessage content={m.content} />
+            )}
           </div>
         ))}
-        {loading && <div style={{ padding: "10px 14px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, fontSize: 13, color: C.textMuted }}>Thinking...</div>}
+        {loading && (
+          <div style={{ padding: "14px 16px", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", gap: 4 }}>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: C.accentLight, opacity: 0.6, animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` }} />
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: C.textMuted }}>Analysing your data...</div>
+            </div>
+          </div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
       <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Ask about your data..." rows={1} style={{ flex: 1, padding: "12px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, outline: "none", fontFamily: "'Inter', sans-serif", resize: "none", overflowY: "hidden", lineHeight: 1.5, wordBreak: "break-word", whiteSpace: "pre-wrap", boxSizing: "border-box", fieldSizing: "content", minHeight: 44, maxHeight: 120 }} />
