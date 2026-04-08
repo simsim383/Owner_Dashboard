@@ -143,6 +143,7 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
       if (!monthMap[mKey]) monthMap[mKey] = { days: [], items: {}, cats: {} };
       monthMap[mKey].days.push(d);
       d.items.forEach(i => {
+        if (i.category === "Lottery") return; // Lottery excluded — game rotation has no ordering value
         // Product-level aggregation
         const key = i.product;
         if (!monthMap[mKey].items[key]) monthMap[mKey].items[key] = { product: i.product, category: i.category, qty: 0, gross: 0 };
@@ -203,7 +204,7 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
       const q = d.items.reduce((s, i) => s + i.qty, 0);
       const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
       const dLabel = day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?";
-      const top8 = [...d.items].sort((a, b) => b.qty - a.qty).slice(0, 8).map(i => i.product + "(" + i.qty + ",£" + i.gross.toFixed(2) + ")").join(", ");
+      const top8 = [...d.items].filter(i => i.category !== "Lottery").sort((a, b) => b.qty - a.qty).slice(0, 8).map(i => i.product + "(" + i.qty + ",£" + i.gross.toFixed(2) + ")").join(", ");
       return "  " + dLabel + " " + d.dates?.start + ": £" + g.toFixed(0) + " | " + top8;
     }).join("\n");
 
@@ -236,6 +237,7 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
     sortedDays.forEach(d => {
       if (!d.dates?.start) return;
       d.items.forEach(i => {
+        if (i.category === "Lottery") return; // Lottery excluded — supplier-controlled rotation
         const key = i.product;
         if (!productVelocity[key]) {
           productVelocity[key] = { product: i.product, category: i.category, totalQty: 0, totalGross: 0, firstSaleDate: d.dates.start, daysSeen: 0 };
@@ -272,6 +274,7 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
     sortedDays.forEach(d => {
       if (!d.dates?.start) return;
       d.items.forEach(i => {
+        if (i.category === "Lottery") return; // Lottery excluded
         const brand = i.product.split(" ")[0].toLowerCase();
         if (!brandVelocity[brand]) brandVelocity[brand] = { totalQty: 0, skus: new Set(), firstSaleDate: d.dates.start };
         brandVelocity[brand].totalQty += i.qty;
@@ -291,6 +294,7 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
         // Brand totals across all history
     const brandTotals = {};
     allDays.forEach(d => d.items.forEach(i => {
+      if (i.category === "Lottery") return; // Lottery excluded
       const brand = i.product.split(" ")[0].toLowerCase();
       if (!brandTotals[brand]) brandTotals[brand] = { qty: 0, gross: 0, skus: 0 };
       brandTotals[brand].qty += i.qty;
@@ -412,6 +416,7 @@ COMPARISON format:
 • NEVER use markdown tables — use bullet points
 • NEVER say you lack data for a month without checking MONTHLY SUMMARIES first
 • NEVER confuse units with revenue — units are quantities sold, revenue is £ value. They are completely different numbers
+• NEVER discuss Lottery products — they are excluded from all data as they are supplier-controlled rotations with no ordering value
 • For revenue questions always use the £ gross figures, NEVER use qty numbers as if they were £
 • For ordering/case questions: read weekly velocity from PRODUCT VELOCITY table above, then multiply by weeks needed, then divide by case size. Show each step.
 • ALWAYS show maths for stock calculations
