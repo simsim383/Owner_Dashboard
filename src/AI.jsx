@@ -123,7 +123,11 @@ function renderInline(text) {
 }
 
 // ─── AI CHAT ────────────────────────────────────────────────────
-export function AIChatSection({ analysis, allDays, currentDays, timeRange, messages, setMessages }) {
+export function AIChatSection({ analysis, allDays, currentDays, timeRange, messages: messagesProp, setMessages: setMessagesProp }) {
+  const [messagesInternal, setMessagesInternal] = useState([]);
+  // Use prop-based messages if provided (lifted state), otherwise use internal state
+  const messages = messagesProp ?? messagesInternal;
+  const setMessages = setMessagesProp ?? setMessagesInternal;
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const chatRef = useRef();
