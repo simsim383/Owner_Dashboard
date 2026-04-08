@@ -419,6 +419,7 @@ COMPARISON format:
 • NEVER discuss Lottery products — they are excluded from all data as they are supplier-controlled rotations with no ordering value
 • For revenue questions always use the £ gross figures, NEVER use qty numbers as if they were £
 • For ordering/case questions: read weekly velocity from PRODUCT VELOCITY table above, then multiply by weeks needed, then divide by case size. Show each step.
+• NEVER give case-count ordering recommendations for categories (e.g. "Household", "Bakery") — categories contain many different SKUs and cannot be ordered as cases. For categories, show the top 3 individual named products within that category and give case counts for those instead.
 • ALWAYS show maths for stock calculations
 • NEVER suggest price increases on price-marked items (Pm in name)
 • Always end with 👉 Next step`;
@@ -432,7 +433,7 @@ COMPARISON format:
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: AI_HDR,
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 800, system: systemPrompt, messages: newMessages }),
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 1200, system: systemPrompt, messages: newMessages }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || data.error.type);
