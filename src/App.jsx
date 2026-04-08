@@ -519,6 +519,13 @@ export default function App() {
   const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
   const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
   const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
+  // Full-history analysis always covering ALL uploaded days — AI never depends on active tab
+  const fullAnalysis = useMemo(() => {
+    if (!allDays.length) return null;
+    const allItems = allDays.flatMap(d => d.items);
+    const fullRange = { items: allItems, dates: { start: allDays[0]?.dates?.start, end: allDays[allDays.length - 1]?.dates?.start } };
+    return analyzeData(allDays, fullRange, "All Time", null);
+  }, [allDays]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
