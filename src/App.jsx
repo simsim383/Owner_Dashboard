@@ -249,7 +249,8 @@ function AuthScreen({ onAuthenticated }) {
   return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 480, margin: "0 auto", fontFamily: "'Inter', 'SF Pro Display', -apple-system, sans-serif", color: C.textPrimary, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 360, textAlign: "center" }}>
-        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
+        <img src="/icon-192.png" alt="Retail Intelligence" onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="inline-flex"; }} style={{ width: 80, height: 80, objectFit: "contain", marginBottom: 20, borderRadius: 16 }} />
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.accentLight}, ${C.green})`, display: "none", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 20 }}>📊</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: C.white, marginBottom: 4 }}>Retail Intelligence</div>
         <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 28 }}>Owner Dashboard</div>
 
@@ -399,6 +400,7 @@ export default function App() {
     localStorage.removeItem("shopmate_client_uuid");
     setAuthenticated(false); setClientId(null); setClientName("");
     setAllDays([]); setActiveSection("dashboard"); setActiveTab("home");
+    setChatMessages([]); // clear conversation on logout
   };
 
   const addDay = useCallback(async (data, uploadType, transactions) => {
@@ -517,13 +519,6 @@ export default function App() {
   const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
   const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
   const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
-  // Full-history analysis always covering ALL uploaded days — used by AI so it never depends on the active tab
-  const fullAnalysis = useMemo(() => {
-    if (!allDays.length) return null;
-    const allItems = allDays.flatMap(d => d.items);
-    const fullRange = { items: allItems, dates: { start: allDays[0]?.dates?.start, end: allDays[allDays.length - 1]?.dates?.start } };
-    return analyzeData(allDays, fullRange, "All Time", null);
-  }, [allDays]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -575,7 +570,7 @@ export default function App() {
       case "coming":     return <ComingUpSection />;
       case "trends":     return <TrendsSection />;
       case "settings":   return <SettingsSection clientId={clientId} clientName={clientName} onRefresh={refreshData} onLogout={handleLogout} onViewDay={handleViewDay} onViewMonth={handleViewMonth} />;
-      case "ai":         return <AIChatSection analysis={fullAnalysis || analysis} allDays={allDays} currentDays={currentDays} timeRange={rangeLabel} />;
+      case "ai":         return <AIChatSection analysis={fullAnalysis || analysis} allDays={allDays} currentDays={currentDays} timeRange={rangeLabel} messages={chatMessages} setMessages={setChatMessages} />;
       default:           return <Dashboard analysis={analysis} dates={currentData.dates} allDays={currentDays} timeRange={rangeLabel} prevWeekDays={prevWeekDays} />;
     }
   };
