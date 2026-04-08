@@ -59,8 +59,16 @@ export function analyzeData(allDays,currentRange,timeRange,prevWeekDays){
   }
 
   // Top/bottom by QTY
+  // Top 5: ALL products incl. untracked — volume doesn't need cost data
+  // Bottom 5: tracked only — margin/profit analysis requires cost data
   const catTopBottom={};
-  categories.forEach(cat=>{const wc=cat.products.filter(p=>p.hasCost);const byQty=[...wc].sort((a,b)=>b.qty-a.qty);catTopBottom[cat.name]={top:byQty.slice(0,5),bottom:isMultiDay?[...wc].sort((a,b)=>a.qty-b.qty).slice(0,5):[]};});
+  categories.forEach(cat=>{
+    const allProds=cat.products;
+    const trackedProds=cat.products.filter(p=>p.hasCost);
+    const byQtyAll=[...allProds].sort((a,b)=>b.qty-a.qty);
+    const byQtyTracked=[...trackedProds].sort((a,b)=>a.qty-b.qty);
+    catTopBottom[cat.name]={top:byQtyAll.slice(0,5),bottom:isMultiDay?byQtyTracked.slice(0,5):[]};
+  });
 
   // Previous period items for trending comparison
   // prevWeekDays is now set for ALL modes: day=yesterday, week=prev 7 days, month=prev month
