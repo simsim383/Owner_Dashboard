@@ -135,30 +135,53 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
   const systemPrompt = useMemo(() => {
     const { summary, categories } = analysis;
 
-    // Group all days by calendar month for cross-month comparison questions
+    // Group all days by calendar month — products AND categories, by both qty and revenue
     const monthMap = {};
     allDays.forEach(d => {
       if (!d.dates?.start) return;
       const mKey = d.dates.start.slice(0, 7);
-      if (!monthMap[mKey]) monthMap[mKey] = { days: [], items: {} };
+      if (!monthMap[mKey]) monthMap[mKey] = { days: [], items: {}, cats: {} };
       monthMap[mKey].days.push(d);
       d.items.forEach(i => {
+        // Product-level aggregation
         const key = i.product;
         if (!monthMap[mKey].items[key]) monthMap[mKey].items[key] = { product: i.product, category: i.category, qty: 0, gross: 0 };
         monthMap[mKey].items[key].qty += i.qty;
         monthMap[mKey].items[key].gross += i.gross;
+        // Category-level aggregation
+        const cat = i.category || "Uncategorised";
+        if (!monthMap[mKey].cats[cat]) monthMap[mKey].cats[cat] = { qty: 0, gross: 0 };
+        monthMap[mKey].cats[cat].qty += i.qty;
+        monthMap[mKey].cats[cat].gross += i.gross;
       });
     });
 
     const monthSummaries = Object.entries(monthMap)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([mKey, { days, items }]) => {
+      .map(([mKey, { days, items, cats }]) => {
         const label = new Date(mKey + "-15").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
         const totalRev = days.reduce((s, d) => s + d.items.reduce((ss, i) => ss + i.gross, 0), 0);
         const totalQty = days.reduce((s, d) => s + d.items.reduce((ss, i) => ss + i.qty, 0), 0);
-        const top10 = Object.values(items).sort((a, b) => b.qty - a.qty).slice(0, 10).map(i => i.product + "(" + i.qty + ")").join(", ");
-        return label + ": " + days.length + " days, £" + totalRev.toFixed(0) + " rev, " + totalQty + " units. Top: " + top10;
-      }).join("\n");
+
+        // Top 10 products by UNITS
+        const top10qty = Object.values(items).sort((a, b) => b.qty - a.qty).slice(0, 10)
+          .map(i => i.product + "(" + i.qty + " units)").join(", ");
+
+        // Top 10 products by REVENUE
+        const top10rev = Object.values(items).sort((a, b) => b.gross - a.gross).slice(0, 10)
+          .map(i => i.product + "(£" + i.gross.toFixed(0) + ")").join(", ");
+
+        // Category breakdown by revenue (sorted highest first)
+        const catBreakdown = Object.entries(cats)
+          .sort(([, a], [, b]) => b.gross - a.gross)
+          .map(([cat, v]) => cat + ":£" + v.gross.toFixed(0) + "/" + v.qty + "units")
+          .join(", ");
+
+        return label + ": " + days.length + " days, £" + totalRev.toFixed(0) + " total rev, " + totalQty + " total units\n" +
+          "  Categories by revenue: " + catBreakdown + "\n" +
+          "  Top products by units: " + top10qty + "\n" +
+          "  Top products by revenue: " + top10rev;
+      }).join("\n\n");
 
     // Viewed range context
     const viewedDays = currentDays || allDays;
@@ -198,6 +221,32 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
     const quietest = sortedByRev[sortedByRev.length - 1];
     const busiestProfit = [...dayStats].sort((a, b) => b.profit - a.profit)[0];
     const dayRankings = "Busiest by revenue: " + busiest?.weekday + " " + busiest?.date + " — £" + busiest?.gross.toFixed(0) + (busiest?.transactions ? ", " + busiest.transactions + " trans" : "") + "\nQuietest: " + quietest?.weekday + " " + quietest?.date + " — £" + quietest?.gross.toFixed(0) + "\nMost profitable: " + busiestProfit?.weekday + " " + busiestProfit?.date + " — £" + busiestProfit?.profit.toFixed(0) + "\nTop 5 by revenue: " + sortedByRev.slice(0, 5).map((d, idx) => (idx + 1) + ". " + d.weekday + " " + d.date + " £" + d.gross.toFixed(0)).join(", ");
+
+    // Pre-computed product velocity — weekly rate per product across all history
+    // This is the source of truth for ordering calculations. AI must use these figures,
+    // never re-derive velocity by dividing raw quantities itself.
+    const totalDays = allDays.length || 1;
+    const productVelocity = {};
+    allDays.forEach(d => d.items.forEach(i => {
+      const key = i.product;
+      if (!productVelocity[key]) productVelocity[key] = { product: i.product, category: i.category, totalQty: 0, totalGross: 0 };
+      productVelocity[key].totalQty += i.qty;
+      productVelocity[key].totalGross += i.gross;
+    }));
+    // Top 60 products by quantity with pre-calculated weekly velocity and case quantities
+    const velocityTable = Object.values(productVelocity)
+      .sort((a, b) => b.totalQty - a.totalQty)
+      .slice(0, 60)
+      .map(p => {
+        const weeklyVel = (p.totalQty / totalDays * 7);
+        const avgPrice = p.totalQty > 0 ? p.totalGross / p.totalQty : 0;
+        // Pre-compute cases needed for common time horizons at common case sizes
+        const cases12_4wk = Math.ceil(weeklyVel * 4 / 12);
+        const cases12_10wk = Math.ceil(weeklyVel * 10 / 12);
+        const cases24_4wk = Math.ceil(weeklyVel * 4 / 24);
+        return p.product + ": " + p.totalQty + " units/" + totalDays + "days, weekly=" + weeklyVel.toFixed(1) + ", avg£" + avgPrice.toFixed(2) + " [12-can case: 4wk=" + cases12_4wk + ", 10wk=" + cases12_10wk + "] [24-can case: 4wk=" + cases24_4wk + "]";
+      })
+      .join("\n");
 
     // Brand totals across all history
     const brandTotals = {};
@@ -249,6 +298,10 @@ ${perDayTopSellers}
 
 ━━━ PRE-COMPUTED DAY RANKINGS — do not re-derive ━━━
 ${dayRankings}
+
+━━━ PRE-COMPUTED PRODUCT VELOCITY & CASE CALCULATIONS — always use these for ordering questions ━━━
+Format: product: total_qty/days, weekly=X.X, avgPrice [12-can case: 4wk=N, 10wk=N] [24-can case: 4wk=N]
+${velocityTable}
 
 ━━━ PRE-COMPUTED BRAND TOTALS — do not re-sum ━━━
 ${topBrands}
@@ -314,6 +367,9 @@ COMPARISON format:
 ━━━ HARD RULES ━━━
 • NEVER use markdown tables — use bullet points
 • NEVER say you lack data for a month without checking MONTHLY SUMMARIES first
+• NEVER confuse units with revenue — units are quantities sold, revenue is £ value. They are completely different numbers
+• For revenue questions always use the £ gross figures, NEVER use qty numbers as if they were £
+• For ordering/case questions: read weekly velocity from PRODUCT VELOCITY table above, then multiply by weeks needed, then divide by case size. Show each step.
 • ALWAYS show maths for stock calculations
 • NEVER suggest price increases on price-marked items (Pm in name)
 • Always end with 👉 Next step`;
