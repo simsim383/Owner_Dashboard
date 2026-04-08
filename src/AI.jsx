@@ -123,66 +123,64 @@ function renderInline(text) {
 }
 
 // ─── AI CHAT ────────────────────────────────────────────────────
-export function AIChatSection({ analysis, allDays, messages, setMessages }) {
+export function AIChatSection({ analysis, allDays, currentDays, timeRange, messages, setMessages }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const chatRef = useRef();
 
   const systemPrompt = useMemo(() => {
     const { summary, categories } = analysis;
+
+    // Group all days by calendar month for cross-month comparison questions
+    const monthMap = {};
+    allDays.forEach(d => {
+      if (!d.dates?.start) return;
+      const mKey = d.dates.start.slice(0, 7);
+      if (!monthMap[mKey]) monthMap[mKey] = { days: [], items: {} };
+      monthMap[mKey].days.push(d);
+      d.items.forEach(i => {
+        const key = i.product;
+        if (!monthMap[mKey].items[key]) monthMap[mKey].items[key] = { product: i.product, category: i.category, qty: 0, gross: 0 };
+        monthMap[mKey].items[key].qty += i.qty;
+        monthMap[mKey].items[key].gross += i.gross;
+      });
+    });
+
+    const monthSummaries = Object.entries(monthMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([mKey, { days, items }]) => {
+        const label = new Date(mKey + "-15").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+        const totalRev = days.reduce((s, d) => s + d.items.reduce((ss, i) => ss + i.gross, 0), 0);
+        const totalQty = days.reduce((s, d) => s + d.items.reduce((ss, i) => ss + i.qty, 0), 0);
+        const top10 = Object.values(items).sort((a, b) => b.qty - a.qty).slice(0, 10).map(i => i.product + "(" + i.qty + ")").join(", ");
+        return label + ": " + days.length + " days, £" + totalRev.toFixed(0) + " rev, " + totalQty + " units. Top: " + top10;
+      }).join("\n");
+
+    // Viewed range context
+    const viewedDays = currentDays || allDays;
+    const viewLabel = timeRange || (allDays.length + " days total");
+    const viewedRev = viewedDays.reduce((s, d) => s + d.items.reduce((ss, i) => ss + i.gross, 0), 0);
+
+    // Daily breakdown — all days
     const dailyBreakdown = allDays.map(d => {
       const g = d.items.reduce((s, i) => s + i.gross, 0);
       const q = d.items.reduce((s, i) => s + i.qty, 0);
       const p = d.items.filter(i => i.hasCost).reduce((s, i) => s + (i.grossProfit || 0), 0);
       const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
-      return `${day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?"} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units, £${p.toFixed(0)} profit${d.transactions ? `, ${d.transactions} trans, £${(g / d.transactions).toFixed(2)} basket` : ""}`;
+      return (day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?") + " " + d.dates?.start + ": £" + g.toFixed(0) + " rev, " + q + " units, £" + p.toFixed(0) + " profit" + (d.transactions ? ", " + d.transactions + " trans, £" + (g / d.transactions).toFixed(2) + " basket" : "");
     }).join("\n");
-    const catS = categories.slice(0, 15).map(c => `${c.name}: £${c.gross.toFixed(0)} (${c.pctRev.toFixed(0)}%), ${c.margin.toFixed(1)}% margin, ${c.qty} units`).join("\n");
 
-    // All products grouped by category, sorted slow→fast within each (so slow movers are visible)
-    const productsByCategory = {};
-    [...analysis.items].forEach(i => {
-      if (!productsByCategory[i.category]) productsByCategory[i.category] = [];
-      productsByCategory[i.category].push(i);
-    });
-    const allProducts = Object.entries(productsByCategory)
-      .sort(([, a], [, b]) => b.reduce((s, i) => s + i.gross, 0) - a.reduce((s, i) => s + i.gross, 0))
-      .map(([cat, items]) => {
-        const sorted = [...items].sort((a, b) => a.qty - b.qty); // slow movers first
-        return `[${cat}]\n` + sorted.map(i => `  ${i.product}:qty=${i.qty},£${i.gross.toFixed(2)},${i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED"}`).join("\n");
-      }).join("\n");
-
-    // Pre-compute brand/keyword totals so the AI never has to sum across SKUs itself
-    const brandTotals = {};
-    [...analysis.items].forEach(i => {
-      const brand = i.product.split(" ")[0].toLowerCase();
-      if (!brandTotals[brand]) brandTotals[brand] = { qty: 0, gross: 0, skus: 0 };
-      brandTotals[brand].qty += i.qty;
-      brandTotals[brand].gross += i.gross;
-      brandTotals[brand].skus += 1;
-    });
-    const topBrands = Object.entries(brandTotals)
-      .filter(([, v]) => v.skus > 1) // only brands with multiple SKUs (where summing errors occur)
-      .sort(([, a], [, b]) => b.qty - a.qty)
-      .slice(0, 20)
-      .map(([brand, v]) => `  ${brand}: ${v.qty} units total across ${v.skus} SKUs (£${v.gross.toFixed(2)})`)
-      .join("\n");
-
-    // Per-day top sellers — gives AI actual product-level data for specific day questions
+    // Per-day top 8 sellers
     const perDayTopSellers = allDays.map(d => {
       const g = d.items.reduce((s, i) => s + i.gross, 0);
       const q = d.items.reduce((s, i) => s + i.qty, 0);
       const day = d.dates ? new Date(d.dates.start + "T12:00:00") : null;
-      const dayLabel = day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?";
-      const top8 = [...d.items]
-        .sort((a, b) => b.qty - a.qty)
-        .slice(0, 8)
-        .map(i => `${i.product}(${i.qty},£${i.gross.toFixed(2)})`)
-        .join(", ");
-      return `  ${dayLabel} ${d.dates?.start}: £${g.toFixed(0)} rev, ${q} units | ${top8}`;
+      const dLabel = day ? day.toLocaleDateString("en-GB", { weekday: "short" }) : "?";
+      const top8 = [...d.items].sort((a, b) => b.qty - a.qty).slice(0, 8).map(i => i.product + "(" + i.qty + ",£" + i.gross.toFixed(2) + ")").join(", ");
+      return "  " + dLabel + " " + d.dates?.start + ": £" + g.toFixed(0) + " | " + top8;
     }).join("\n");
 
-    // Pre-computed day rankings — so AI never has to guess which day was busiest
+    // Pre-computed day rankings
     const dayStats = allDays.map(d => ({
       date: d.dates?.start,
       weekday: d.dates ? new Date(d.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long" }) : "?",
@@ -195,77 +193,98 @@ export function AIChatSection({ analysis, allDays, messages, setMessages }) {
     const busiest = sortedByRev[0];
     const quietest = sortedByRev[sortedByRev.length - 1];
     const busiestProfit = [...dayStats].sort((a, b) => b.profit - a.profit)[0];
-    const dayRankings = `Busiest by revenue: ${busiest?.weekday} ${busiest?.date} — £${busiest?.gross.toFixed(0)}, ${busiest?.qty} units${busiest?.transactions ? ", " + busiest.transactions + " trans" : ""}
-Quietest by revenue: ${quietest?.weekday} ${quietest?.date} — £${quietest?.gross.toFixed(0)}, ${quietest?.qty} units
-Most profitable day: ${busiestProfit?.weekday} ${busiestProfit?.date} — £${busiestProfit?.profit.toFixed(0)} profit
-Top 5 days by revenue: ${sortedByRev.slice(0, 5).map((d, i) => `${i + 1}. ${d.weekday} ${d.date} £${d.gross.toFixed(0)}`).join(", ")}`;
+    const dayRankings = "Busiest by revenue: " + busiest?.weekday + " " + busiest?.date + " — £" + busiest?.gross.toFixed(0) + (busiest?.transactions ? ", " + busiest.transactions + " trans" : "") + "\nQuietest: " + quietest?.weekday + " " + quietest?.date + " — £" + quietest?.gross.toFixed(0) + "\nMost profitable: " + busiestProfit?.weekday + " " + busiestProfit?.date + " — £" + busiestProfit?.profit.toFixed(0) + "\nTop 5 by revenue: " + sortedByRev.slice(0, 5).map((d, idx) => (idx + 1) + ". " + d.weekday + " " + d.date + " £" + d.gross.toFixed(0)).join(", ");
 
-    // Weather history — days with recorded weather data (grows over time as uploads accumulate)
+    // Brand totals across all history
+    const brandTotals = {};
+    allDays.forEach(d => d.items.forEach(i => {
+      const brand = i.product.split(" ")[0].toLowerCase();
+      if (!brandTotals[brand]) brandTotals[brand] = { qty: 0, gross: 0, skus: 0 };
+      brandTotals[brand].qty += i.qty;
+      brandTotals[brand].gross += i.gross;
+      brandTotals[brand].skus += 1;
+    }));
+    const topBrands = Object.entries(brandTotals).filter(([, v]) => v.skus > 1).sort(([, a], [, b]) => b.qty - a.qty).slice(0, 20).map(([brand, v]) => "  " + brand + ": " + v.qty + " units across " + v.skus + " SKUs (£" + v.gross.toFixed(2) + ")").join("\n");
+
+    // Categories for viewed period
+    const catS = categories.slice(0, 15).map(c => c.name + ": £" + c.gross.toFixed(0) + " (" + c.pctRev.toFixed(0) + "%), " + c.margin.toFixed(1) + "% margin, " + c.qty + " units").join("\n");
+
+    // All products for viewed period
+    const productsByCategory = {};
+    [...analysis.items].forEach(i => {
+      if (!productsByCategory[i.category]) productsByCategory[i.category] = [];
+      productsByCategory[i.category].push(i);
+    });
+    const allProducts = Object.entries(productsByCategory)
+      .sort(([, a], [, b]) => b.reduce((s, i) => s + i.gross, 0) - a.reduce((s, i) => s + i.gross, 0))
+      .map(([cat, items]) => {
+        const sorted = [...items].sort((a, b) => a.qty - b.qty);
+        return "[" + cat + "]\n" + sorted.map(i => "  " + i.product + ":qty=" + i.qty + ",£" + i.gross.toFixed(2) + "," + (i.hasCost ? i.grossMargin?.toFixed(1) + "%" : "UNTRACKED")).join("\n");
+      }).join("\n");
+
+    // Weather history
     const weatherDays = allDays.filter(d => d.weather && d.weather.maxTemp != null);
     const weatherHistoryStr = weatherDays.length === 0 ? null : weatherDays.map(d => {
       const g = d.items.reduce((s, i) => s + i.gross, 0);
-      const q = d.items.reduce((s, i) => s + i.qty, 0);
       const top5 = [...d.items].sort((a, b) => b.qty - a.qty).slice(0, 5).map(i => i.product + "(" + i.qty + ")").join(", ");
-      return "  " + d.dates.start + ": " + d.weather.maxTemp + "C/" + d.weather.minTemp + "C, " + d.weather.weatherDesc + " — £" + g.toFixed(0) + " rev, " + q + " units. Top: " + top5;
+      return "  " + d.dates.start + ": " + d.weather.maxTemp + "C/" + d.weather.minTemp + "C, " + d.weather.weatherDesc + " — £" + g.toFixed(0) + ". Top: " + top5;
     }).join("\n");
 
-    return `You are a store manager brain for a UK Londis convenience store. You give clear, direct, actionable advice — not analysis essays. Data period: ${allDays.length} days.
+    return `You are the AI brain for a UK Londis convenience store. You have access to ALL historical sales data. Answer every question using real numbers from the data — never say you don't have data without checking the monthly summaries first.
 
-SUMMARY: £${summary.totalGross.toFixed(0)} revenue, £${summary.trackedProfit.toFixed(0)} profit, ${summary.trackedMargin.toFixed(1)}% margin, ${summary.productCount} products, ${summary.untrackedCount} untracked (£${summary.untrackedRevenue.toFixed(0)}).
+TOTAL DATA: ${allDays.length} days across ${Object.keys(monthMap).length} month(s). User is currently viewing: ${viewLabel} (£${viewedRev.toFixed(0)}).
 
-DAILY SUMMARY:
+━━━ MONTHLY SUMMARIES — use for cross-month questions ━━━
+${monthSummaries}
+
+━━━ DAILY BREAKDOWN (all days) ━━━
 ${dailyBreakdown}
 
-PER-DAY TOP SELLERS (top 8 products each day by units sold):
+━━━ PER-DAY TOP SELLERS ━━━
 ${perDayTopSellers}
 
-CATEGORIES:
-${catS}
-
-PRE-COMPUTED DAY RANKINGS (use these exact figures — do not re-derive from the daily list above):
+━━━ PRE-COMPUTED DAY RANKINGS — do not re-derive ━━━
 ${dayRankings}
 
-PRE-COMPUTED BRAND TOTALS (use these exact numbers — do not re-sum from the product list below):
+━━━ PRE-COMPUTED BRAND TOTALS — do not re-sum ━━━
 ${topBrands}
 
-ALL PRODUCTS BY CATEGORY (slow movers listed first within each category):
+━━━ CATEGORIES (viewed period: ${viewLabel}) ━━━
+${catS}
+
+━━━ ALL PRODUCTS BY CATEGORY (viewed period) ━━━
 ${allProducts}
-${weatherHistoryStr ? "\nWEATHER + SALES HISTORY (actual weather recorded on past sales days):\n" + weatherHistoryStr + "\n\nFor forecast-based stock questions: find the closest matching days above (within 3 degrees, similar weather conditions) and use their actual top sellers as your recommendation. Always state which past date(s) you are drawing from." : ""}
+${weatherHistoryStr ? "\n━━━ WEATHER + SALES HISTORY ━━━\n" + weatherHistoryStr + "\nFor forecast questions: match temperature within 3C and similar conditions." : ""}
 
 ━━━ HOW TO RESPOND ━━━
-First, classify the query as one of:
-- STOCK_ORDERING → ordering quantities, how much to buy, specific product questions
-- PERFORMANCE → profit improvement, what to focus on, why sales are low, growth
-- OPERATIONS → staffing, busy days, shift planning, labour efficiency
+Classify the query as one of:
+- STOCK_ORDERING → ordering, quantities, how much to buy
+- PERFORMANCE → profit, growth, what to improve
+- OPERATIONS → staffing, busy days, labour
+- COMPARISON → cross-month, trends over time, what changed
 
-Then apply the matching format:
+For COMPARISON questions: use MONTHLY SUMMARIES, give exact units per month for each product mentioned, show clearly which direction it moved.
 
 STOCK_ORDERING format:
-📦 [Product/Category] Stock Plan
+📦 [Product] Stock Plan
 
-**Weekly rate:** [X] units/week ([total] ÷ [days] days × 7)
-**Days to cover:** [N] ([start date] → [end date])
+**Weekly rate:** [X] units/week ([total] ÷ [days] × 7)
 **Units needed:** [N]
 
-## Top sellers to prioritise
-- [Product] — [X] sold → need [N] units
+## Top sellers
 - [Product] — [X] sold → need [N] units
 
-👉 **Next step:** [single specific action]
+👉 **Next step:** [action]
 
 PERFORMANCE format:
 📈 Profit Improvement
 
 ## Top opportunities
-- [Specific action] → [specific expected impact]
-- [Specific action] → [specific expected impact]
+- [action] → [impact]
 
-## What the data shows
-- [Sharp insight — max 3 points]
+**Biggest constraint:** [one thing]
 
-**Biggest constraint:** [one thing holding profit back]
-
-👉 **Next step:** [single specific action]
+👉 **Next step:** [action]
 
 OPERATIONS format:
 ⏱️ Staffing & Operations
@@ -273,22 +292,28 @@ OPERATIONS format:
 ## Where to focus
 - [Day/time] → [action]
 
+**Risk to watch:** [risk]
+
+👉 **Next step:** [action]
+
+COMPARISON format:
+📊 [Topic] — Month Comparison
+
+## What changed
+- [Product]: [Month A] [X units] → [Month B] [Y units] ([↑/↓ change])
+
 ## Why this matters
-- [Data-backed reason]
+- [insight]
 
-**Risk to watch:** [specific risk]
-
-👉 **Next step:** [single specific action]
+👉 **Next step:** [action]
 
 ━━━ HARD RULES ━━━
-• NEVER use markdown tables (| col | col |) — use bullet points instead
-• ALWAYS show your maths for stock calculations so the owner can verify
-• NEVER round up or estimate quantities — use the exact numbers from the product data above
-• NEVER suggest price increases on price-marked items (any product with "Pm" in the name)
-• NEVER use vague language ("consider", "might", "could") — be direct
-• Max 3–4 insight points per response
-• Always end with a single 👉 Next step`;
-  }, [analysis, allDays]);
+• NEVER use markdown tables — use bullet points
+• NEVER say you lack data for a month without checking MONTHLY SUMMARIES first
+• ALWAYS show maths for stock calculations
+• NEVER suggest price increases on price-marked items (Pm in name)
+• Always end with 👉 Next step`;
+  }, [analysis, allDays, currentDays, timeRange]);
 
   const send = async () => {
     if (!input.trim() || loading) return;
