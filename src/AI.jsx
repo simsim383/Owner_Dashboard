@@ -222,33 +222,73 @@ export function AIChatSection({ analysis, allDays, currentDays, timeRange, messa
     const busiestProfit = [...dayStats].sort((a, b) => b.profit - a.profit)[0];
     const dayRankings = "Busiest by revenue: " + busiest?.weekday + " " + busiest?.date + " — £" + busiest?.gross.toFixed(0) + (busiest?.transactions ? ", " + busiest.transactions + " trans" : "") + "\nQuietest: " + quietest?.weekday + " " + quietest?.date + " — £" + quietest?.gross.toFixed(0) + "\nMost profitable: " + busiestProfit?.weekday + " " + busiestProfit?.date + " — £" + busiestProfit?.profit.toFixed(0) + "\nTop 5 by revenue: " + sortedByRev.slice(0, 5).map((d, idx) => (idx + 1) + ". " + d.weekday + " " + d.date + " £" + d.gross.toFixed(0)).join(", ");
 
-    // Pre-computed product velocity — weekly rate per product across all history
-    // This is the source of truth for ordering calculations. AI must use these figures,
-    // never re-derive velocity by dividing raw quantities itself.
+    // Pre-computed product velocity using "days since first sale" as denominator.
+    // This correctly handles new products — a product first sold in February is NOT
+    // penalised by January days where it didn't exist. We track the first sale date
+    // per product and use that as the start of its velocity window.
+    // Sporadic-seller guard: if a product sells on fewer than 30% of its active days,
+    // we flag it so the AI doesn't over-inflate velocity for occasional sellers.
     const totalDays = allDays.length || 1;
+    const today = new Date();
+    const sortedDays = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+
     const productVelocity = {};
-    allDays.forEach(d => d.items.forEach(i => {
-      const key = i.product;
-      if (!productVelocity[key]) productVelocity[key] = { product: i.product, category: i.category, totalQty: 0, totalGross: 0 };
-      productVelocity[key].totalQty += i.qty;
-      productVelocity[key].totalGross += i.gross;
-    }));
-    // Top 60 products by quantity with pre-calculated weekly velocity and case quantities
+    sortedDays.forEach(d => {
+      if (!d.dates?.start) return;
+      d.items.forEach(i => {
+        const key = i.product;
+        if (!productVelocity[key]) {
+          productVelocity[key] = { product: i.product, category: i.category, totalQty: 0, totalGross: 0, firstSaleDate: d.dates.start, daysSeen: 0 };
+        }
+        productVelocity[key].totalQty += i.qty;
+        productVelocity[key].totalGross += i.gross;
+        productVelocity[key].daysSeen += 1;
+      });
+    });
+
     const velocityTable = Object.values(productVelocity)
       .sort((a, b) => b.totalQty - a.totalQty)
-      .slice(0, 60)
+      .slice(0, 80)
       .map(p => {
-        const weeklyVel = (p.totalQty / totalDays * 7);
+        const firstSale = new Date(p.firstSaleDate + "T12:00:00");
+        const activeDays = Math.max(1, Math.round((today - firstSale) / 86400000));
+        const weeklyVel = p.totalQty / activeDays * 7;
         const avgPrice = p.totalQty > 0 ? p.totalGross / p.totalQty : 0;
-        // Pre-compute cases needed for common time horizons at common case sizes
-        const cases12_4wk = Math.ceil(weeklyVel * 4 / 12);
-        const cases12_10wk = Math.ceil(weeklyVel * 10 / 12);
-        const cases24_4wk = Math.ceil(weeklyVel * 4 / 24);
-        return p.product + ": " + p.totalQty + " units/" + totalDays + "days, weekly=" + weeklyVel.toFixed(1) + ", avg£" + avgPrice.toFixed(2) + " [12-can case: 4wk=" + cases12_4wk + ", 10wk=" + cases12_10wk + "] [24-can case: 4wk=" + cases24_4wk + "]";
+        const sellThroughRate = p.daysSeen / Math.min(activeDays, totalDays);
+        const sporadic = sellThroughRate < 0.3 && activeDays > 14;
+        const newFlag = activeDays < 21 ? " [NEW PRODUCT — only " + activeDays + " days, treat as estimate]" : "";
+        const sporadicFlag = sporadic ? " [SPORADIC — sells " + Math.round(sellThroughRate * 100) + "% of days, use caution]" : "";
+        const wksToUnits = (wks, sz) => Math.ceil(weeklyVel * wks / sz);
+        return p.product + ": " + p.totalQty + " units since " + p.firstSaleDate + " (" + activeDays + " active days)" +
+          " | weekly=" + weeklyVel.toFixed(2) + " | avg£" + avgPrice.toFixed(2) +
+          " | cases(12): 4wk=" + wksToUnits(4,12) + " 8wk=" + wksToUnits(8,12) + " 10wk=" + wksToUnits(10,12) + " 12wk=" + wksToUnits(12,12) +
+          " | cases(24): 4wk=" + wksToUnits(4,24) + " 8wk=" + wksToUnits(8,24) + " 12wk=" + wksToUnits(12,24) +
+          newFlag + sporadicFlag;
       })
       .join("\n");
 
-    // Brand totals across all history
+    // Brand-level velocity — all SKUs combined, also using first-sale date per brand
+    const brandVelocity = {};
+    sortedDays.forEach(d => {
+      if (!d.dates?.start) return;
+      d.items.forEach(i => {
+        const brand = i.product.split(" ")[0].toLowerCase();
+        if (!brandVelocity[brand]) brandVelocity[brand] = { totalQty: 0, skus: new Set(), firstSaleDate: d.dates.start };
+        brandVelocity[brand].totalQty += i.qty;
+        brandVelocity[brand].skus.add(i.product);
+      });
+    });
+    const brandVelStr = Object.entries(brandVelocity)
+      .filter(([, v]) => v.totalQty >= 10)
+      .sort(([, a], [, b]) => b.totalQty - a.totalQty)
+      .slice(0, 30)
+      .map(([brand, v]) => {
+        const activeDays = Math.max(1, Math.round((today - new Date(v.firstSaleDate + "T12:00:00")) / 86400000));
+        return brand + ": " + v.totalQty + " units since " + v.firstSaleDate + " (" + activeDays + " days) | weekly=" + (v.totalQty / activeDays * 7).toFixed(1) + " | SKUs: " + [...v.skus].join(", ");
+      })
+      .join("\n");
+
+        // Brand totals across all history
     const brandTotals = {};
     allDays.forEach(d => d.items.forEach(i => {
       const brand = i.product.split(" ")[0].toLowerCase();
@@ -299,8 +339,12 @@ ${perDayTopSellers}
 ━━━ PRE-COMPUTED DAY RANKINGS — do not re-derive ━━━
 ${dayRankings}
 
-━━━ PRE-COMPUTED PRODUCT VELOCITY & CASE CALCULATIONS — always use these for ordering questions ━━━
-Format: product: total_qty/days, weekly=X.X, avgPrice [12-can case: 4wk=N, 10wk=N] [24-can case: 4wk=N]
+━━━ BRAND-LEVEL VELOCITY (all SKUs combined — use when user asks about a brand not exact SKU) ━━━
+${brandVelStr}
+
+━━━ PRE-COMPUTED PRODUCT VELOCITY & CASE CALCULATIONS — ALWAYS use for ordering questions ━━━
+Denominator: ${totalDays} calendar days total. Format: weekly velocity | pre-computed cases for common sizes/horizons
+CRITICAL: These are the only numbers you may use for ordering calculations. Never re-derive velocity.
 ${velocityTable}
 
 ━━━ PRE-COMPUTED BRAND TOTALS — do not re-sum ━━━
