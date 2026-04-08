@@ -56,7 +56,7 @@ export function CategoriesSection({ analysis, timeRange, onSelectProduct }) {
               </div>
 
               {/* Top 5 */}
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🏆 Top 5</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.greenText, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>🏆 Top 5 by Units Sold</div>
               {catTopBottom[cat.name].top.map((p, i) => (
                 <div key={i} onClick={() => onSelectProduct && onSelectProduct(p)} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.divider}`, cursor: "pointer" }}>
                   <span style={{ fontSize: 12, color: C.white, flex: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i + 1}. {p.product}</span>
