@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 
-// ── Colour tokens (matches existing app) ────────────────────────────
+// ── Colour tokens ────────────────────────────────────────────────────
 const C = {
   bg: "#0a0f1a", surface: "#111827", border: "rgba(255,255,255,0.08)",
   divider: "rgba(255,255,255,0.05)", white: "#ffffff", textPrimary: "#f1f5f9",
@@ -20,7 +20,7 @@ const C = {
 const f   = v => `£${Number(v).toFixed(2)}`;
 const pct = v => `${Math.round(v)}%`;
 
-// ── Shared card wrapper ──────────────────────────────────────────────
+// ── Shared UI components ─────────────────────────────────────────────
 function SectionCard({ title, icon, children }) {
   return (
     <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, marginBottom: 16, overflow: "hidden" }}>
@@ -35,12 +35,23 @@ function SectionCard({ title, icon, children }) {
   );
 }
 
-function StatBox({ label, value, sub, color }) {
+// Tappable stat box — optional onClick for drilldown
+function StatBox({ label, value, sub, color, onClick }) {
   return (
-    <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px", border: `1px solid ${C.border}`, textAlign: "center", minWidth: 0 }}>
+    <div
+      onClick={onClick}
+      style={{
+        flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px",
+        border: `1px solid ${onClick ? C.amber : C.border}`,
+        textAlign: "center", minWidth: 0,
+        cursor: onClick ? "pointer" : "default",
+        position: "relative",
+      }}
+    >
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</div>
       <div style={{ fontSize: 17, fontWeight: 800, color: color || C.white, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize: 8, color: C.amberText, marginTop: 3, letterSpacing: 0.4 }}>TAP FOR MONTHS</div>}
     </div>
   );
 }
@@ -53,22 +64,51 @@ function Badge({ text, color, bg }) {
   );
 }
 
-// ── Open Food Facts lookup ───────────────────────────────────────────
+// ── Monthly drilldown modal ──────────────────────────────────────────
+function MonthlyModal({ title, months, onClose }) {
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "flex-end", maxWidth: 480, margin: "0 auto" }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ width: "100%", maxHeight: "70vh", overflowY: "auto", borderRadius: "20px 20px 0 0", background: C.surface, padding: 20 }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.white }}>{title}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+        {months.length === 0 && (
+          <div style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "20px 0" }}>No data for this year yet.</div>
+        )}
+        {months.map((m, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 0", borderBottom: `1px solid ${C.divider}` }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.white }}>{m.label}</div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: m.isValue ? C.blueText : C.white }}>{m.primary}</div>
+              {m.secondary && <div style={{ fontSize: 11, color: C.textMuted }}>{m.secondary}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Open Food Facts — name/brand/image only, no nutrition ────────────
 async function fetchOpenFoodFacts(barcode) {
   try {
-    const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const res  = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
     const data = await res.json();
     if (data.status === 1 && data.product) {
       const p = data.product;
       return {
         found: true,
-        name: p.product_name_en || p.product_name || "Unknown Product",
-        brand: p.brands || null,
+        name:     p.product_name_en || p.product_name || "Unknown Product",
+        brand:    p.brands || null,
         category: p.categories_tags?.[0]?.replace("en:", "") || p.categories || null,
-        quantity: p.quantity || null,
         imageUrl: p.image_front_small_url || p.image_url || null,
-        nutriScore: p.nutriscore_grade || null,
-        ingredients: p.ingredients_text_en || p.ingredients_text || null,
       };
     }
     return { found: false };
@@ -77,20 +117,51 @@ async function fetchOpenFoodFacts(barcode) {
   }
 }
 
-// ── EPOS lookup — matches barcode against allDays ────────────────────
+// ── EPOS lookup ──────────────────────────────────────────────────────
 function lookupInEPOS(barcode, allDays) {
   if (!allDays || !allDays.length) return null;
 
+  // Sort days oldest → newest
+  const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
+
   const matches = [];
-  allDays.forEach(day => {
+  sorted.forEach(day => {
     const item = day.items?.find(i => String(i.barcode).trim() === String(barcode).trim());
     if (item) matches.push({ ...item, date: day.dates?.start });
   });
 
   if (!matches.length) return null;
 
-  const totalQty    = matches.reduce((s, i) => s + (i.qty || 0), 0);
-  const totalGross  = matches.reduce((s, i) => s + (i.gross || 0), 0);
+  // ── Most recent day this product appears — for sell price & profit/unit ──
+  const recentMatch = matches[matches.length - 1];
+  const estPrice    = recentMatch.qty > 0 ? recentMatch.gross / recentMatch.qty : null;
+  const profitPerUnit = (recentMatch.hasCost && recentMatch.grossProfit != null && recentMatch.qty > 0)
+    ? recentMatch.grossProfit / recentMatch.qty : null;
+
+  // ── Year-to-date (Jan 1 of current year) ────────────────────────
+  const yearStart   = `${new Date().getFullYear()}-01-01`;
+  const ytdMatches  = matches.filter(m => m.date >= yearStart);
+  const ytdQty      = ytdMatches.reduce((s, i) => s + (i.qty || 0), 0);
+  const ytdGross    = ytdMatches.reduce((s, i) => s + (i.gross || 0), 0);
+
+  // ── Monthly breakdown for YTD (for drilldown modals) ────────────
+  const monthMap = {};
+  ytdMatches.forEach(m => {
+    const key = m.date?.slice(0, 7); // "2025-04"
+    if (!key) return;
+    if (!monthMap[key]) monthMap[key] = { qty: 0, gross: 0 };
+    monthMap[key].qty   += m.qty || 0;
+    monthMap[key].gross += m.gross || 0;
+  });
+  const monthlyBreakdown = Object.entries(monthMap)
+    .sort(([a], [b]) => b.localeCompare(a)) // newest first
+    .map(([key, v]) => ({
+      label:  new Date(key + "-15").toLocaleDateString("en-GB", { month: "long", year: "numeric" }),
+      qty:    v.qty,
+      gross:  v.gross,
+    }));
+
+  // ── All-time totals for margin calc ─────────────────────────────
   const totalNet    = matches.reduce((s, i) => s + (i.net || 0), 0);
   const totalProfit = matches.some(i => i.grossProfit != null)
     ? matches.reduce((s, i) => s + (i.grossProfit || 0), 0) : null;
@@ -98,14 +169,14 @@ function lookupInEPOS(barcode, allDays) {
   const avgMargin   = hasCost && totalNet > 0 && totalProfit != null
     ? (totalProfit / totalNet) * 100 : null;
 
+  // ── Velocity: weekly avg over all data ──────────────────────────
   const totalDays = allDays.length;
+  const totalQty  = matches.reduce((s, i) => s + (i.qty || 0), 0);
   const weeklyVel = totalDays > 0 ? Math.round((totalQty / totalDays) * 7 * 10) / 10 : 0;
 
-  // Last 7 days vs previous 7 days
-  const sorted  = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
-  const last7   = sorted.slice(-7);
-  const prev7   = sorted.slice(-14, -7);
-
+  // ── Last 7 vs previous 7 for trend ──────────────────────────────
+  const last7  = sorted.slice(-7);
+  const prev7  = sorted.slice(-14, -7);
   const last7Qty = last7.reduce((s, day) => {
     const item = day.items?.find(i => String(i.barcode).trim() === String(barcode).trim());
     return s + (item?.qty || 0);
@@ -114,10 +185,9 @@ function lookupInEPOS(barcode, allDays) {
     const item = day.items?.find(i => String(i.barcode).trim() === String(barcode).trim());
     return s + (item?.qty || 0);
   }, 0);
-
   const trendPct = prev7Qty > 0 ? Math.round(((last7Qty - prev7Qty) / prev7Qty) * 100) : null;
 
-  // Best day of week
+  // ── Best day of week ─────────────────────────────────────────────
   const byDay = {};
   matches.forEach(m => {
     if (!m.date) return;
@@ -126,38 +196,48 @@ function lookupInEPOS(barcode, allDays) {
   });
   const bestDay = Object.entries(byDay).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
-  // Daily breakdown for mini chart (last 14 days)
+  // ── Daily breakdown for mini chart (last 14 days) ────────────────
   const dailyBreakdown = sorted.slice(-14).map(day => {
     const item = day.items?.find(i => String(i.barcode).trim() === String(barcode).trim());
     return {
-      date: day.dates?.start,
+      date:    day.dates?.start,
       dayName: day.dates?.start
         ? new Date(day.dates.start + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" })
         : "?",
-      qty: item?.qty || 0,
+      qty:    item?.qty || 0,
       profit: item?.grossProfit || null,
     };
   });
 
-  const sample = matches[matches.length - 1];
+  const sample = recentMatch;
 
   return {
     found: true,
-    product: sample.product,
+    product:  sample.product,
     category: sample.category,
     barcode,
-    totalQty,
-    totalGross,
-    totalProfit,
+    // Velocity
+    weeklyVel,
+    // YTD
+    ytdQty,
+    ytdGross,
+    monthlyBreakdown,
+    // Margin
     hasCost,
     avgMargin,
-    weeklyVel,
+    // Per-unit (from most recent day)
+    estPrice,
+    profitPerUnit,
+    recentDate: recentMatch.date,
+    // Trend
     last7Qty,
     prev7Qty,
     trendPct,
+    // Best day
     bestDay,
+    // Chart
     dailyBreakdown,
-    daysInData: totalDays,
+    daysInData:   totalDays,
     daysWithSales: matches.length,
   };
 }
@@ -183,13 +263,29 @@ function MiniBarChart({ data }) {
 }
 
 // ── EPOS result panel ────────────────────────────────────────────────
-function EPOSResultPanel({ epos, offData }) {
-  const [showBreakdown, setShowBreakdown] = useState(false);
+function EPOSResultPanel({ epos }) {
+  const [showBreakdown, setShowBreakdown]   = useState(false);
+  const [modal, setModal]                   = useState(null); // "qty" | "revenue" | null
 
-  const trendColor  = epos.trendPct == null ? C.textMuted
-    : epos.trendPct > 0 ? C.greenText : C.redText;
+  const trendColor  = epos.trendPct == null ? C.textMuted : epos.trendPct > 0 ? C.greenText : C.redText;
   const marginColor = epos.avgMargin == null ? C.textMuted
     : epos.avgMargin >= 25 ? C.greenText : epos.avgMargin >= 15 ? C.amberText : C.redText;
+
+  // Monthly modal data
+  const qtyMonths = epos.monthlyBreakdown.map(m => ({
+    label:     m.label,
+    primary:   `${m.qty} units`,
+    secondary: f(m.gross),
+    isValue:   false,
+  }));
+  const revenueMonths = epos.monthlyBreakdown.map(m => ({
+    label:     m.label,
+    primary:   f(m.gross),
+    secondary: `${m.qty} units`,
+    isValue:   true,
+  }));
+
+  const yearLabel = new Date().getFullYear();
 
   return (
     <div>
@@ -213,20 +309,36 @@ function EPOSResultPanel({ epos, offData }) {
         )}
       </div>
 
-      {/* Stats row 1 */}
+      {/* Row 1 — Weekly avg | YTD Sold (tappable) | YTD Revenue (tappable) */}
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <StatBox label="Weekly Avg" value={`${epos.weeklyVel}`} sub="units/wk" color={C.white} />
-        <StatBox label="Total Sold" value={epos.totalQty} sub={`${epos.daysWithSales}/${epos.daysInData} days`} color={C.white} />
-        <StatBox label="Revenue" value={f(epos.totalGross)} sub="total" color={C.blueText} />
+        <StatBox
+          label="Weekly Avg"
+          value={`${epos.weeklyVel}`}
+          sub="units/wk"
+        />
+        <StatBox
+          label={`Sold ${yearLabel}`}
+          value={epos.ytdQty}
+          sub="units — tap for months"
+          color={C.white}
+          onClick={() => setModal("qty")}
+        />
+        <StatBox
+          label={`Revenue ${yearLabel}`}
+          value={f(epos.ytdGross)}
+          sub="tap for months"
+          color={C.blueText}
+          onClick={() => setModal("revenue")}
+        />
       </div>
 
-      {/* Stats row 2 */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      {/* Row 2 — Profit/unit | Margin | Best Day | Est. Price */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <StatBox
-          label="Profit"
-          value={epos.hasCost && epos.totalProfit != null ? f(epos.totalProfit) : "—"}
-          sub={epos.hasCost ? "total" : "no cost data"}
-          color={epos.hasCost ? C.greenText : C.textMuted}
+          label="Profit/Unit"
+          value={epos.profitPerUnit != null ? f(epos.profitPerUnit) : "—"}
+          sub={epos.recentDate ? `from ${epos.recentDate}` : "no cost data"}
+          color={epos.profitPerUnit != null ? C.greenText : C.textMuted}
         />
         <StatBox
           label="Margin"
@@ -234,7 +346,18 @@ function EPOSResultPanel({ epos, offData }) {
           sub={epos.avgMargin >= 25 ? "strong" : epos.avgMargin >= 15 ? "ok" : epos.avgMargin != null ? "review" : "—"}
           color={marginColor}
         />
-        <StatBox label="Best Day" value={epos.bestDay?.slice(0, 3) || "—"} sub={epos.bestDay || "—"} color={C.amberText} />
+        <StatBox
+          label="Est. Price"
+          value={epos.estPrice != null ? f(epos.estPrice) : "—"}
+          sub={epos.recentDate ? `as of ${epos.recentDate}` : "—"}
+          color={C.amberText}
+        />
+        <StatBox
+          label="Best Day"
+          value={epos.bestDay?.slice(0, 3) || "—"}
+          sub={epos.bestDay || "—"}
+          color={C.white}
+        />
       </div>
 
       {/* No cost warning */}
@@ -278,7 +401,7 @@ function EPOSResultPanel({ epos, offData }) {
             onClick={() => setShowBreakdown(!showBreakdown)}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "12px 14px", borderRadius: showBreakdown ? "10px 10px 0 0" : 10, background: C.bg, border: `1px solid ${C.border}`, cursor: "pointer", color: C.white }}
           >
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Daily Sales ({epos.dailyBreakdown.length} days)</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Daily Sales (last {epos.dailyBreakdown.length} days)</span>
             <span style={{ fontSize: 12, color: C.textMuted }}>{showBreakdown ? "▲" : "▼"}</span>
           </button>
           {showBreakdown && (
@@ -299,26 +422,26 @@ function EPOSResultPanel({ epos, offData }) {
         </div>
       )}
 
-      {/* Open Food Facts supplement */}
-      {offData?.found && (offData.brand || offData.nutriScore || offData.quantity) && (
-        <div style={{ padding: "12px 14px", borderRadius: 10, background: C.blueDim, border: "1px solid rgba(59,130,246,0.2)" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.blueText, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>Product Info</div>
-          {offData.brand    && <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 4 }}>Brand: <span style={{ color: C.white, fontWeight: 600 }}>{offData.brand}</span></div>}
-          {offData.quantity && <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 4 }}>Size: <span style={{ color: C.white }}>{offData.quantity}</span></div>}
-          {offData.nutriScore && (
-            <div style={{ fontSize: 12, color: C.textSecondary }}>
-              Nutri-Score: <span style={{ fontWeight: 800, color: { a: C.greenText, b: "#a3e635", c: C.amberText, d: "#fb923c", e: C.redText }[offData.nutriScore] || C.textMuted }}>
-                {offData.nutriScore.toUpperCase()}
-              </span>
-            </div>
-          )}
-        </div>
+      {/* Monthly modals */}
+      {modal === "qty" && (
+        <MonthlyModal
+          title={`Units Sold by Month — ${yearLabel}`}
+          months={qtyMonths}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === "revenue" && (
+        <MonthlyModal
+          title={`Revenue by Month — ${yearLabel}`}
+          months={revenueMonths}
+          onClose={() => setModal(null)}
+        />
       )}
     </div>
   );
 }
 
-// ── Not-in-store panel ───────────────────────────────────────────────
+// ── Not-in-store panel (Open Food Facts only, no nutrition data) ──────
 function OFFResultPanel({ offData, barcode }) {
   return (
     <div>
@@ -336,30 +459,13 @@ function OFFResultPanel({ offData, barcode }) {
       <div style={{ padding: "12px 14px", borderRadius: 10, background: C.amberDim, border: "1px solid rgba(245,158,11,0.2)", marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.amberText, marginBottom: 4 }}>Not Currently Stocked</div>
         <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.5 }}>
-          This product isn't in your EPOS data. No sales history to compare against yet.
+          This product isn't in your EPOS data. Scan it after you start stocking it to see performance data.
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        {offData.quantity   && <StatBox label="Pack Size" value={offData.quantity} />}
-        {offData.nutriScore && (
-          <StatBox
-            label="Nutri-Score"
-            value={offData.nutriScore.toUpperCase()}
-            color={{ a: C.greenText, b: "#a3e635", c: C.amberText, d: "#fb923c", e: C.redText }[offData.nutriScore] || C.textMuted}
-          />
-        )}
-        <StatBox label="Barcode" value={barcode} sub="EAN" />
+      <div style={{ padding: "10px 14px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, fontSize: 12, color: C.textMuted }}>
+        Barcode: <span style={{ color: C.white, fontWeight: 600 }}>{barcode}</span>
       </div>
-
-      {offData.ingredients && (
-        <div style={{ padding: "10px 14px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.6 }}>Ingredients</div>
-          <div style={{ fontSize: 11, color: C.textSecondary, lineHeight: 1.5 }}>
-            {offData.ingredients.slice(0, 200)}{offData.ingredients.length > 200 ? "…" : ""}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -367,7 +473,7 @@ function OFFResultPanel({ offData, barcode }) {
 // ── Scanner camera view ──────────────────────────────────────────────
 function ScannerView({ onResult, onClose }) {
   const html5QrRef = useRef(null);
-  const hasScanned  = useRef(false); // ref so the closure always sees the latest value
+  const hasScanned  = useRef(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -386,25 +492,21 @@ function ScannerView({ onResult, onClose }) {
       { facingMode: "environment" },
       config,
       (decodedText) => {
-        // ref prevents duplicate fires from multiple frames
         if (hasScanned.current) return;
         hasScanned.current = true;
         try { qr.stop(); } catch (_) {}
         onResult(decodedText);
       },
-      () => {} // ignore per-frame decode errors
+      () => {}
     ).catch(() => {
       setError("Camera access denied. Please allow camera access and try again.");
     });
 
-    return () => {
-      try { if (qr) qr.stop(); } catch (_) {}
-    };
+    return () => { try { if (qr) qr.stop(); } catch (_) {} };
   }, []);
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 1000, display: "flex", flexDirection: "column" }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", background: "rgba(0,0,0,0.8)", backdropFilter: "blur(10px)" }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.white }}>Scan Barcode</div>
@@ -415,11 +517,8 @@ function ScannerView({ onResult, onClose }) {
         </button>
       </div>
 
-      {/* Camera */}
       <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
         <div id="qr-reader" style={{ width: "100%", maxWidth: 500 }} />
-
-        {/* Corner guides */}
         {[
           { top: "calc(50% - 65px)", left: "calc(50% - 130px)", borderTop: `3px solid ${C.green}`, borderLeft: `3px solid ${C.green}` },
           { top: "calc(50% - 65px)", right: "calc(50% - 130px)", borderTop: `3px solid ${C.green}`, borderRight: `3px solid ${C.green}` },
@@ -428,7 +527,6 @@ function ScannerView({ onResult, onClose }) {
         ].map((s, i) => (
           <div key={i} style={{ position: "absolute", width: 24, height: 24, pointerEvents: "none", ...s }} />
         ))}
-
         {error && (
           <div style={{ position: "absolute", bottom: 20, left: 20, right: 20, padding: "12px 16px", borderRadius: 12, background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: C.redText, fontSize: 13, textAlign: "center" }}>
             {error}
@@ -472,14 +570,13 @@ function ManualEntry({ onSubmit }) {
 // Props: allDays — array of day objects from Supabase
 // ════════════════════════════════════════════════════════════════════
 export default function Scanner({ allDays }) {
-  const [view, setView]         = useState("home");   // home | scanning | loading | result | notfound
+  const [view, setView]         = useState("home");
   const [barcode, setBarcode]   = useState(null);
   const [eposData, setEposData] = useState(null);
   const [offData, setOffData]   = useState(null);
   const [history, setHistory]   = useState([]);
 
   const handleBarcode = useCallback(async (code) => {
-    // Immediately switch to loading — this is the key fix
     setView("loading");
     setBarcode(code);
     setEposData(null);
@@ -505,7 +602,6 @@ export default function Scanner({ allDays }) {
     setOffData(null);
   };
 
-  // Render camera as a fixed overlay — completely separate from the view state machine
   if (view === "scanning") {
     return <ScannerView onResult={handleBarcode} onClose={() => setView("home")} />;
   }
@@ -572,10 +668,9 @@ export default function Scanner({ allDays }) {
               📷 Scan Another
             </button>
           </div>
-
           <SectionCard>
             {eposData
-              ? <EPOSResultPanel epos={eposData} offData={offData} />
+              ? <EPOSResultPanel epos={eposData} />
               : offData?.found
                 ? <OFFResultPanel offData={offData} barcode={barcode} />
                 : null
@@ -593,7 +688,7 @@ export default function Scanner({ allDays }) {
               <div style={{ fontSize: 36, marginBottom: 12 }}>🤷</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: C.white, marginBottom: 8 }}>Product Not Found</div>
               <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.6, marginBottom: 16 }}>
-                Barcode <span style={{ color: C.white, fontWeight: 600 }}>{barcode}</span> wasn't found in your EPOS data or the Open Food Facts database.
+                Barcode <span style={{ color: C.white, fontWeight: 600 }}>{barcode}</span> wasn't found in your EPOS data or the product database.
               </div>
               <div style={{ padding: "12px 14px", borderRadius: 10, background: C.bg, border: `1px solid ${C.border}`, textAlign: "left", fontSize: 12, color: C.textMuted, lineHeight: 1.6 }}>
                 This may be a non-food item or a product not yet in the database. Try manual entry if the camera misread it.
