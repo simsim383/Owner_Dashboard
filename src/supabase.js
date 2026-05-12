@@ -105,6 +105,7 @@ export async function verifyPin(clientId, pin) {
 export async function setPin(clientId, pin) {
   if (!clientId || !pin) return;
   try {
+    // Explicit fields only — only pin can be updated via this function
     const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${encodeURIComponent(clientId)}`, {
       method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
       body: JSON.stringify({ pin }),
@@ -118,12 +119,62 @@ export async function getOrCreateClient(ownerId) {
   try {
     const existing = await sbGet("clients", `name=eq.${encodeURIComponent(ownerId)}`);
     if (existing.length > 0) return existing[0];
-    const [created] = await sbPost("clients", [{ name: ownerId, owner_name: ownerId }]);
+    // Explicit fields only — never accepts arbitrary object from caller
+    const [created] = await sbPost("clients", [{
+      name: ownerId,
+      owner_name: ownerId,
+    }]);
     console.log("Created client:", created);
     return created;
   } catch (e) {
     console.error("Client lookup/create failed:", e);
     return null;
+  }
+}
+
+// ─── AI RATE LIMITING ────────────────────────────────────────────
+// Call this before every Claude API request. Returns { allowed: true }
+// or { allowed: false, reason: "..." } if the daily limit is hit.
+// Limit is 50 AI calls per client per day — adjust AI_DAILY_LIMIT as needed.
+const AI_DAILY_LIMIT = 50;
+
+export async function checkAndIncrementAiCalls(clientId) {
+  if (!clientId) return { allowed: false, reason: "No client ID" };
+  try {
+    const rows = await sbGet("clients", `id=eq.${encodeURIComponent(clientId)}&select=ai_calls_today,ai_calls_date`);
+    if (!rows.length) return { allowed: false, reason: "Client not found" };
+
+    const client = rows[0];
+    const today = new Date().toISOString().split("T")[0];
+    const isNewDay = !client.ai_calls_date || client.ai_calls_date !== today;
+
+    // Reset counter if it's a new day
+    const currentCount = isNewDay ? 0 : (client.ai_calls_today || 0);
+
+    if (currentCount >= AI_DAILY_LIMIT) {
+      return {
+        allowed: false,
+        reason: `Daily AI limit of ${AI_DAILY_LIMIT} questions reached. Resets at midnight.`,
+      };
+    }
+
+    // Increment the counter
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/clients?id=eq.${encodeURIComponent(clientId)}`, {
+      method: "PATCH",
+      headers: { ...HDR, "Prefer": "return=representation" },
+      body: JSON.stringify({
+        ai_calls_today: currentCount + 1,
+        ai_calls_date: today,
+      }),
+    });
+    if (!r.ok) throw new Error("Failed to update AI call counter");
+
+    return { allowed: true, callsUsed: currentCount + 1, callsRemaining: AI_DAILY_LIMIT - currentCount - 1 };
+  } catch (e) {
+    console.error("AI rate limit check failed:", e);
+    // Fail open — if the check itself errors, allow the call through
+    // so a Supabase blip doesn't break the AI for the user
+    return { allowed: true };
   }
 }
 
@@ -166,12 +217,18 @@ export async function pushToSupabase(clientId, data, uploadType, transactions, c
         if (weather) console.log(`Weather for ${date}: ${weather.max_temp}°C, ${weather.weather_desc}`);
       }
 
+      // Explicit fields only — never spreads data object directly
       const [upload] = await sbPost("uploads", [{
-        client_id: clientId, report_date: date, report_start: startDate, report_end: endDate,
-        filename: data.filename || "upload.xls", row_count: data.items.length,
+        client_id: clientId,
+        report_date: date,
+        report_start: startDate,
+        report_end: endDate,
+        filename: data.filename || "upload.xls",
+        row_count: data.items.length,
         total_gross: Math.round(totalGross / divisor * 100) / 100,
         total_qty: Math.round(totalQty / divisor),
-        upload_type: uploadType, is_estimated: isEstimated,
+        upload_type: uploadType,
+        is_estimated: isEstimated,
         transactions: dailyTrans,
         avg_basket: dailyTrans ? Math.round((totalGross / divisor) / dailyTrans * 100) / 100 : null,
         // Weather columns — null if location not set or fetch failed
@@ -181,14 +238,21 @@ export async function pushToSupabase(clientId, data, uploadType, transactions, c
         weather_desc: weather?.weather_desc ?? null,
       }]);
 
+      // Explicit fields only — maps each item property individually
       const rows = data.items.map(i => ({
-        client_id: clientId, upload_id: upload.id, report_date: date,
-        barcode: i.barcode, product: i.product, category: i.category,
+        client_id: clientId,
+        upload_id: upload.id,
+        report_date: date,
+        barcode: i.barcode,
+        product: i.product,
+        category: i.category,
         qty: isEstimated ? Math.round(i.qty / divisor) : i.qty,
         gross: Math.round((i.gross / divisor) * 100) / 100,
         net: Math.round((i.net / divisor) * 100) / 100,
         gross_profit: i.grossProfit != null ? Math.round((i.grossProfit / divisor) * 100) / 100 : null,
-        gross_margin: i.grossMargin, has_cost_data: i.hasCost, is_estimated: isEstimated,
+        gross_margin: i.grossMargin,
+        has_cost_data: i.hasCost,
+        is_estimated: isEstimated,
       }));
       for (let i = 0; i < rows.length; i += 100) { await sbPost("daily_sales", rows.slice(i, i + 100)); }
       uploadIds.push(upload.id);
@@ -262,42 +326,78 @@ export async function claimOwnerId(id, inviteCode) {
   if (takenOwner.length > 0 || takenClient.length > 0) {
     throw new Error("ID already taken");
   }
+  // Explicit fields only — id and created_at, nothing else
   await sbPost("owner_ids", [{ id, created_at: new Date().toISOString() }]);
+  // Explicit fields only — only the fields we intend to update on invite claim
   const r = await fetch(`${SUPABASE_URL}/rest/v1/invite_codes?code=eq.${encodeURIComponent(inviteCode)}`, {
     method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-    body: JSON.stringify({ used: true, used_by: id, used_at: new Date().toISOString() }),
+    body: JSON.stringify({
+      used: true,
+      used_by: id,
+      used_at: new Date().toISOString(),
+    }),
   });
   if (!r.ok) throw new Error("Failed to mark code as used");
+  // Explicit fields only — name and owner_name, never anything else on signup
   await sbPost("clients", [{ name: id, owner_name: id }]);
   return { ok: true };
 }
 
 // ─── PROMO STORAGE ──────────────────────────────────────────────
 export async function savePromoScan(clientId, scan, decisions, skips) {
+  // Explicit fields only — destructure each property we intend to store
   const [scanRow] = await sbPost("promo_scans", [{
-    client_id: clientId, supplier: scan.source || "Unknown", promo_dates: scan.promoDates || "",
-    budget: scan.budget || 2500, total_spend: scan.totalSpend || 0, remaining: scan.remaining || 0,
-    est_revenue: scan.estRevenue || 0, est_profit: scan.estProfit || 0, roi: scan.roi || 0,
-    key_insight: scan.keyInsight || "", status: "active",
+    client_id: clientId,
+    supplier: scan.source || "Unknown",
+    promo_dates: scan.promoDates || "",
+    budget: scan.budget || 2500,
+    total_spend: scan.totalSpend || 0,
+    remaining: scan.remaining || 0,
+    est_revenue: scan.estRevenue || 0,
+    est_profit: scan.estProfit || 0,
+    roi: scan.roi || 0,
+    key_insight: scan.keyInsight || "",
+    status: "active",
     buy_count: decisions.filter(d => d.decision === "BUY").length,
     test_count: decisions.filter(d => d.decision === "TEST").length,
     skip_count: (skips || []).length,
   }]);
   if (decisions.length > 0) {
+    // Explicit fields only — maps each decision property individually
     await sbPost("promo_decisions", decisions.map(d => ({
-      scan_id: scanRow.id, client_id: clientId, product: d.product, source: d.source,
-      case_price: d.casePrice, por: d.por, rrp: d.rrp, vel: d.vel, qty: d.qty,
-      cover: d.cover, units: d.units, total_inc: d.totalInc, decision: d.decision, notes: d.notes,
+      scan_id: scanRow.id,
+      client_id: clientId,
+      product: d.product,
+      source: d.source,
+      case_price: d.casePrice,
+      por: d.por,
+      rrp: d.rrp,
+      vel: d.vel,
+      qty: d.qty,
+      cover: d.cover,
+      units: d.units,
+      total_inc: d.totalInc,
+      decision: d.decision,
+      notes: d.notes,
     })));
   }
   if (decisions.length > 0) {
     await sbPost("promo_price_history", decisions.filter(d => d.casePrice).map(d => ({
-      client_id: clientId, product: d.product, supplier: d.source, case_price: d.casePrice,
-      rrp: d.rrp, scan_id: scanRow.id,
+      client_id: clientId,
+      product: d.product,
+      supplier: d.source,
+      case_price: d.casePrice,
+      rrp: d.rrp,
+      scan_id: scanRow.id,
     })));
   }
   if (skips && skips.length > 0) {
-    await sbPost("promo_skips", skips.map(s => ({ scan_id: scanRow.id, product: s.product, reason: s.reason })));
+    // Explicit fields only — product and reason, nothing else from skip object
+    await sbPost("promo_skips", skips.map(s => ({
+      scan_id: scanRow.id,
+      product: s.product,
+      reason: s.reason,
+    })));
   }
   return scanRow;
 }
@@ -323,9 +423,19 @@ export async function loadAllPriceHistory(clientId) {
 }
 
 export async function updatePromoDecision(decisionId, updates) {
+  // Explicit fields only — whitelist the exact fields that can be updated
+  // This prevents mass assignment where arbitrary fields could be passed in
+  const safeUpdates = {
+    ...(updates.decision !== undefined && { decision: updates.decision }),
+    ...(updates.qty !== undefined && { qty: Number(updates.qty) }),
+    ...(updates.notes !== undefined && { notes: String(updates.notes) }),
+    ...(updates.case_price !== undefined && { case_price: Number(updates.case_price) }),
+    ...(updates.rrp !== undefined && { rrp: Number(updates.rrp) }),
+    ...(updates.total_inc !== undefined && { total_inc: Number(updates.total_inc) }),
+  };
   const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_decisions?id=eq.${decisionId}`, {
     method: "PATCH", headers: { ...HDR, "Prefer": "return=representation" },
-    body: JSON.stringify(updates),
+    body: JSON.stringify(safeUpdates),
   });
   if (!r.ok) throw new Error("Failed to update decision");
   return r.json();
@@ -337,7 +447,13 @@ export async function deletePromoScan(scanId) {
 }
 
 export async function saveCorrection(clientId, productPattern, correctionType, correctionValue) {
-  await sbPost("promo_corrections", [{ client_id: clientId, product_pattern: productPattern, correction_type: correctionType, correction_value: correctionValue }]);
+  // Explicit fields only — four named parameters, never a spread object
+  await sbPost("promo_corrections", [{
+    client_id: clientId,
+    product_pattern: productPattern,
+    correction_type: correctionType,
+    correction_value: correctionValue,
+  }]);
 }
 
 export async function loadCorrections(clientId) {
