@@ -979,7 +979,7 @@ Respond ONLY with a valid JSON array. No markdown, no backticks, no explanation.
         method: "POST", headers: AI_HDR,
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 4000,
+          max_tokens: 8000,
           tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, user_location: { type: "approximate", country: "GB", region: "England", timezone: "Europe/London" } }],
           messages: [{ role: "user", content: prompt }],
         }),
