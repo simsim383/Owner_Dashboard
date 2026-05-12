@@ -10,7 +10,6 @@ import { CategoriesSection, TrendingSection, ReviewSection, ErosionSection, TopS
 import Search from "./Search.jsx";
 import { UploadScreen, ManageUploadsSection } from "./Upload.jsx";
 import { AIChatSection, ComingUpSection, NewsSection, TrendsSection, WeatherSection } from "./AI.jsx";
-import LeafletScanner from "./Promos.jsx";
 import Scanner from "./Scanner.jsx";
 
 // ─── OFFLINE BANNER ─────────────────────────────────────────────
@@ -134,7 +133,6 @@ const monthlySections = [
   { id: "clearshelf", label: "Clear Shelf", icon: "🧹" },
 ];
 const alwaysSections = [
-  { id: "leaflet", label: "Promotions", icon: "🎯" },
   { id: "scanner", label: "Scanner", icon: "📷" },
   { id: "weather", label: "Weather", icon: "🌤️" },
   { id: "coming", label: "Coming Up", icon: "📅" },
@@ -143,7 +141,26 @@ const alwaysSections = [
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const sectionSubs = { dashboard: "KPIs & insights", cats: "Revenue, profit, top/bottom", trending: "40%+ vs previous", review: "Low margin items", topsellers: "Best profit contributors", erosion: "Margin alerts", missing: "No cost data items", ops: "Daily patterns & basket", actions: "Prioritised to-do list", density: "ELITE / OK / THIEF audit", competitor: "vs Tesco & Asda pricing", clearshelf: "Slow mover promotions", leaflet: "Scan deals, track promos", scanner: "Scan any product barcode", weather: "7-day forecast & stock prep", coming: "Events & prep", settings: "Uploads, PIN, logout", ai: "Ask about your data", trends: "Viral & trending products" };
+const sectionSubs = {
+  dashboard: "KPIs & insights",
+  cats: "Revenue, profit, top/bottom",
+  trending: "40%+ vs previous",
+  review: "Low margin items",
+  topsellers: "Best profit contributors",
+  erosion: "Margin alerts",
+  missing: "No cost data items",
+  ops: "Daily patterns & basket",
+  actions: "Prioritised to-do list",
+  density: "ELITE / OK / THIEF audit",
+  competitor: "vs Tesco & Asda pricing",
+  clearshelf: "Slow mover promotions",
+  scanner: "Scan any product barcode",
+  weather: "7-day forecast & stock prep",
+  coming: "Events & prep",
+  settings: "Uploads, PIN, logout",
+  ai: "Ask about your data",
+  trends: "Viral & trending products",
+};
 
 const bottomNav = [
   { id: "home", icon: "🏠", label: "Home" },
@@ -412,7 +429,7 @@ export default function App() {
       try {
         const locRaw = localStorage.getItem(`weather_loc_${clientId}`);
         if (locRaw) clientLocation = JSON.parse(locRaw);
-    } catch {}
+      } catch {}
       const result = await pushToSupabase(clientId, data, uploadType || "day", transactions, clientLocation);
       if (result.ok) {
         setSbStatus(`✓ ${result.daysInserted} day${result.daysInserted > 1 ? "s" : ""} saved`);
@@ -467,7 +484,6 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }, []);
 
-  // Previous complete month key (for comparison only)
   const prevMonthKey = useMemo(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -480,7 +496,6 @@ export default function App() {
       return [allDays[allDays.length - 1]];
     }
     if (timeRange === "week") {
-      // Last 7 calendar days by date, not last 7 records
       const sorted = [...allDays].sort((a, b) => (a.dates?.start || "").localeCompare(b.dates?.start || ""));
       const latest = sorted[sorted.length - 1]?.dates?.start;
       if (!latest) return sorted.slice(-7);
@@ -489,7 +504,6 @@ export default function App() {
       const cutoffStr = cutoff.toISOString().split("T")[0];
       return sorted.filter(d => d.dates?.start >= cutoffStr);
     }
-    // Month: use selected month or CURRENT month
     const mKey = selectedMonth || currentMonthKey;
     const monthDays = allDays.filter(d => d.dates?.start?.startsWith(mKey));
     return monthDays.length > 0 ? monthDays : allDays;
@@ -521,7 +535,6 @@ export default function App() {
   const sectionList = [...baseSections, ...(isMonth ? monthlySections : []), ...alwaysSections];
   const sectionGrid = sectionList.map(s => ({ ...s, sub: sectionSubs[s.id] || "" }));
   const analysis = useMemo(() => currentData ? analyzeData(allDays, currentData, rangeLabel, prevWeekDays) : null, [currentData, allDays, rangeLabel, prevWeekDays]);
-  // Full-history analysis always covering ALL uploaded days — AI never depends on active tab
   const fullAnalysis = useMemo(() => {
     if (!allDays.length) return null;
     const allItems = allDays.flatMap(d => d.items);
@@ -574,7 +587,6 @@ export default function App() {
       case "density":    return <ShelfDensitySection analysis={analysis} />;
       case "competitor": return <CompetitorPricingSection analysis={analysis} />;
       case "clearshelf": return <ClearShelfSection analysis={analysis} />;
-      case "leaflet":    return <LeafletScanner analysis={analysis} clientId={clientId} allDays={allDays} />;
       case "scanner":    return <Scanner allDays={allDays} />;
       case "weather":    return <WeatherSection clientId={clientId} analysis={analysis} />;
       case "coming":     return <ComingUpSection />;
@@ -609,7 +621,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Time toggle — all 3 tabs always shown, but note if offline */}
+        {/* Time toggle */}
         <div style={{ display: "flex", gap: 4, marginBottom: isMonth ? 8 : 12 }}>
           {timeRanges.map(tr => (
             <button key={tr.id} onClick={() => handleTimeRangeChange(tr.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", background: timeRange === tr.id ? C.accentLight : C.surface, color: timeRange === tr.id ? C.white : C.textMuted }}>
@@ -619,7 +631,7 @@ export default function App() {
         </div>
         {isOffline && <div style={{ fontSize: 11, color: C.orangeText, marginBottom: 8, padding: "6px 10px", background: C.orangeDim, borderRadius: 8 }}>📵 Offline — showing day, week & current month only</div>}
 
-        {/* Month selector — hidden when offline */}
+        {/* Month selector */}
         {isMonth && !isOffline && availableMonths.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <select value={selectedMonth || currentMonthKey} onChange={e => setSelectedMonth(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: C.surface, color: C.white, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, outline: "none", fontFamily: "'Inter', sans-serif", appearance: "none", WebkitAppearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748B'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}>
